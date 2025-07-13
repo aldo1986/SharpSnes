@@ -16,7 +16,7 @@ public class Bus
     {
         // Aquí es donde ocurre la magia del ruteo.
         // Por ahora, solo tenemos dos rutas: RAM y ROM.
-        
+
         // Mapeo simple para la WRAM (ej. banco $00, direcciones $0000-$1FFF)
         if (address >= 0x0000 && address <= 0x1FFF)
         {
@@ -31,7 +31,7 @@ public class Bus
             // Hacemos un mapeo simple para que $8000 lea desde el inicio del array.
             return romData[address];
         }
-        
+
         // Si la dirección no está mapeada, devolvemos 0.
         return 0;
     }
