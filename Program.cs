@@ -3,6 +3,7 @@ using Silk.NET.Windowing;
 using Silk.NET.OpenGL;
 using System.Drawing;
 using Silk.NET.Maths;
+using Silk.NET.Input;
 
 class Program
 {
@@ -21,6 +22,10 @@ class Program
     private static uint Vbo;
     private static uint Ebo;
     private static uint ShaderProgram;
+    private static IKeyboard primaryKeyboard;
+    private static int spriteX = 100;
+    private static int spriteY = 100;
+    private static int currentScanline = 0;
 
     // Datos del cuadrado que llenará la pantalla
     private static readonly float[] Vertices =
@@ -120,6 +125,8 @@ class Program
         Gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.ClampToEdge);
         Gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Nearest);
         Gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Nearest);
+        var inputContext = window.CreateInput();
+        primaryKeyboard = inputContext.Keyboards.FirstOrDefault();
     }
 
     private static unsafe void OnRender(double deltaTime)
@@ -169,65 +176,59 @@ class Program
 
         bus = new Bus();
         cpu = new CPU(bus);
+        bus.ConnectCPU(cpu);
         ppu = bus.Ppu;
 
-        Console.WriteLine("Cargando todos los datos en la PPU...");
+        Console.WriteLine("Cargando datos para un fondo de 4bpp (16 colores)...");
 
-        // --- 2. CARGAR PALETAS DE COLORES (VERSIÓN CORREGIDA Y COMPLETA) ---
-        ppu.Write(0x2121, 0x00); // Apuntar al inicio de CGRAM (Color #0)
+        // --- 1. CARGAR UNA PALETA DE 16 COLORES ---
+        ppu.Write(0x2121, 0x00); // Apuntar al inicio de CGRAM (Paleta #0)
 
-        // Paleta del Fondo (Paleta #0)
-        ppu.Write(0x2122, 0x00); ppu.Write(0x2122, 0x00); // Color 0 (Transparente/Negro)
-        ppu.Write(0x2122, 0xFF); ppu.Write(0x2122, 0x03); // Color 1 (Amarillo = 0x03FF)
+        // Color 0 es transparente
+        ppu.Write(0x2122, 0x00); ppu.Write(0x2122, 0x00);
 
-        // Paleta del Sprite (Paleta #8)
-        ppu.Write(0x2121, 128); // Apuntar al inicio de la Paleta #8 (Color #128)
-        ppu.Write(0x2122, 0x00); ppu.Write(0x2122, 0x00); // Color 0 de la paleta del sprite (Transparente)
-        ppu.Write(0x2122, 0x1F); ppu.Write(0x2122, 0x00); // Color 1 de la paleta del sprite (Rojo = 0x001F)
-
-        // --- 3. CARGAR DATOS DE TILES ---
-        byte[] tileData = { 0b00111100, 0b00111100, 0b01000010, 0b01000010, 0b10100101, 0b10000001, 0b10000001, 0b10000001, 0b10100101, 0b10100101, 0b10011001, 0b10011001, 0b01000010, 0b01000010, 0b00111100, 0b00111100 };
-        ppu.Write(0x2116, 0x10); ppu.Write(0x2117, 0x00);
-        for (int i = 0; i < tileData.Length; i++) { ppu.Write(0x2118, tileData[i]); }
-
-        byte[] spriteTileData = { 0x55, 0x00, 0x55, 0x00, 0x55, 0x00, 0x55, 0x00, 0x55, 0x00, 0x55, 0x00, 0x55, 0x00, 0x55, 0x00 };
-        ppu.Write(0x2116, 0x20); ppu.Write(0x2117, 0x00);
-        for (int i = 0; i < spriteTileData.Length; i++) { ppu.Write(0x2118, spriteTileData[i]); }
-
-        // --- 4. CREAR EL TILEMAP DEL FONDO ---
-        ppu.Write(0x2116, 0x00); ppu.Write(0x2117, 0x10);
-        for (int y = 0; y < 32; y++)
+        // Cargaremos un gradiente de rojo
+        for (int i = 1; i < 16; i++)
         {
-            for (int x = 0; x < 32; x++)
-            {
-                ushort tileInfo = (x % 4 == 0 && y % 4 == 0) ? (ushort)1 : (ushort)0;
-                ppu.Write(0x2118, (byte)(tileInfo & 0xFF));
-                ppu.Write(0x2118, (byte)(tileInfo >> 8));
-            }
+            // El valor de rojo va de 2 a 31
+            byte redValue = (byte)(i * 2);
+            ushort color = (ushort)(redValue & 0x1F); // Formato BGR555, solo componente R
+            ppu.Write(0x2122, (byte)(color & 0xFF));
+            ppu.Write(0x2122, (byte)(color >> 8));
         }
 
-        // --- 5. CONFIGURAR EL SPRITE EN LA OAM ---
-        ppu.Write(0x2102, 0x00);
-        ppu.Write(0x2104, 100);
-        ppu.Write(0x2104, 100);
-        ppu.Write(0x2104, 2);
-        ppu.Write(0x2104, 0x00);
-
-        // --- 6. MOTOR DE ANIMACIÓN ---
-        int scrollX = 0;
-        int frameCount = 0;
-        window.Update += (deltaTime) =>
+        // --- 2. CARGAR DATOS DE UN TILE DE 4BPP (32 bytes) ---
+        // Este tile será un cuadrado que usa los 16 colores de la paleta.
+        byte[] tile4bpp = new byte[32];
+        for (int i = 0; i < 8; i++) // Para cada fila (8)
         {
-            scrollX++;
-            frameCount++;
-            bus.Write(0x210D, (byte)(scrollX & 0xFF));
-            bus.Write(0x210F, (byte)((scrollX >> 8) & 0x01));
-            bus.Write(0x2102, 0);
-            bus.Write(0x2104, (byte)(100 + Math.Sin(frameCount * 0.05) * 20));
-            bus.Write(0x2104, (byte)(100 + Math.Cos(frameCount * 0.05) * 20));
-        };
+            // Plano 0
+            tile4bpp[i * 2] = 0b11110000;
+            // Plano 1
+            tile4bpp[i * 2 + 1] = 0b11001100;
+            // Plano 2
+            tile4bpp[i * 2 + 16] = 0b10101010;
+            // Plano 3 (no se usa en esta prueba)
+            tile4bpp[i * 2 + 17] = 0b00000000;
+        }
 
-        // --- 7. INICIAR LA VENTANA ---
+        // Escribimos el tile en la nueva dirección base para tiles 4bpp (VRAM $2020 para Tile #1)
+        ppu.Write(0x2116, 0x20); ppu.Write(0x2117, 0x20);
+        for (int i = 0; i < tile4bpp.Length; i++) { ppu.Write(0x2118, tile4bpp[i]); }
+
+        // --- 3. CREAR EL TILEMAP ---
+        // Haremos que toda la pantalla muestre nuestro nuevo Tile #1
+        ppu.Write(0x2116, 0x00); ppu.Write(0x2117, 0x10); // Apuntar a VRAM $1000
+        for (int i = 0; i < 32 * 32; i++)
+        {
+            ushort tileInfo = 1; // Tile #1, Paleta #0
+            ppu.Write(0x2118, (byte)(tileInfo & 0xFF));
+            ppu.Write(0x2118, (byte)(tileInfo >> 8));
+        }
+
+        // Por ahora, quitamos la animación y los sprites para enfocarnos en el fondo
+        // window.Update += ...
+
         window.Run();
     }
 }

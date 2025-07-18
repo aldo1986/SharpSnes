@@ -22,6 +22,13 @@ public class PPU
     {
         this.bus = bus;
     }
+    public void EnterVBlank()
+    {
+        // Aquí la PPU haría cosas como poner un flag de estado.
+        // Lo más importante es que avisa al Bus para que interrumpa al CPU.
+        Console.WriteLine("📺 [PPU] Entrando en V-Blank, solicitando NMI...");
+        bus.TriggerNMI();
+    }
 
     public byte Read(ushort address)
     {
@@ -94,48 +101,47 @@ public void RenderFrame(byte[] pixelBuffer)
         // --- 2. DIBUJAR EL FONDO ---
         const int TILEMAP_BASE = 0x1000;
         const int TILESET_BASE = 0x0000;
+        const int TILESET_BASE_4BPP = 0x2000;
 
         for (int screenY = 0; screenY < 224; screenY++)
         {
             for (int screenX = 0; screenX < 256; screenX++)
             {
-                // Aplicar el desplazamiento de scroll
                 int backgroundX = (screenX + _horizontalScroll) % 512;
                 int backgroundY = (screenY + _verticalScroll) % 512;
-
-                // Calcular en qué tile del mapa estamos
                 int tilemapX = backgroundX / 8;
                 int tilemapY = backgroundY / 8;
 
-                // Obtener la información de ese tile del mapa
                 int tilemapEntryAddress = TILEMAP_BASE + (tilemapY * 32 + tilemapX) * 2;
                 ushort tileInfo = (ushort)(vram[tilemapEntryAddress] | (vram[tilemapEntryAddress + 1] << 8));
-
                 int tileNumber = tileInfo & 0x3FF;
                 if (tileNumber == 0) continue;
 
-                // Extraer el número de paleta (0-7) de los bits 10-12 del tileInfo
                 int bgPaletteNum = (tileInfo >> 10) & 0x07;
 
-                // Calcular la dirección del gráfico del tile
-                int tileAddress = TILESET_BASE + (tileNumber * 16);
+                // Un tile de 4bpp ocupa 32 bytes
+                int tileAddress = TILESET_BASE_4BPP + (tileNumber * 32);
 
-                // Encontrar el píxel exacto dentro del tile de 8x8
                 int innerX = backgroundX % 8;
                 int innerY = backgroundY % 8;
 
-                // Decodificar el color del píxel a partir de los planos de bits
+                // Leemos 4 planos de bits. Los planos 0/1 y 2/3 están intercalados.
                 byte plano0 = vram[tileAddress + innerY * 2];
                 byte plano1 = vram[tileAddress + innerY * 2 + 1];
+                byte plano2 = vram[tileAddress + 16 + innerY * 2];
+                byte plano3 = vram[tileAddress + 16 + innerY * 2 + 1];
+
                 int bit0 = (plano0 >> (7 - innerX)) & 1;
                 int bit1 = (plano1 >> (7 - innerX)) & 1;
-                int paletteIndex = (bit1 << 1) | bit0;
+                int bit2 = (plano2 >> (7 - innerX)) & 1;
+                int bit3 = (plano3 >> (7 - innerX)) & 1;
+
+                // Combinamos los 4 bits para un índice de 0 a 15
+                int paletteIndex = (bit3 << 3) | (bit2 << 2) | (bit1 << 1) | bit0;
                 if (paletteIndex == 0) continue;
 
-                // Calcular el índice de color final usando la paleta del mapa
                 int finalColorIndexBG = (bgPaletteNum * 16) + paletteIndex;
 
-                // Convertir el color de SNES (BGR555) a PC (RGBA) y escribirlo
                 ushort snesColor = (ushort)(cgram[finalColorIndexBG * 2] | (cgram[finalColorIndexBG * 2 + 1] << 8));
                 byte r = (byte)((snesColor & 0x1F) * 8);
                 byte g = (byte)(((snesColor >> 5) & 0x1F) * 8);
