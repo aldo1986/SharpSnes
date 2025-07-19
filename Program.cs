@@ -179,56 +179,46 @@ class Program
         bus.ConnectCPU(cpu);
         ppu = bus.Ppu;
 
-        Console.WriteLine("Cargando datos para un fondo de 4bpp (16 colores)...");
+        Console.WriteLine("Probando instrucciones de subrutinas y pila...");
 
-        // --- 1. CARGAR UNA PALETA DE 16 COLORES ---
-        ppu.Write(0x2121, 0x00); // Apuntar al inicio de CGRAM (Paleta #0)
+    // --- CÓDIGO DE PRUEBA ---
+    
+    // Subrutina en $9000: Carga 99 en A y regresa.
+    bus.Write(0x9000, 0xA9); bus.Write(0x9001, 99); // LDA #99
+    bus.Write(0x9002, 0x60);                      // RTS
 
-        // Color 0 es transparente
-        ppu.Write(0x2122, 0x00); ppu.Write(0x2122, 0x00);
+    // Programa Principal en $8000
+    int codePtr = 0x8000;
+    bus.Write((ushort)codePtr++, 0xA9); bus.Write((ushort)codePtr++, 55); // LDA #55      (A = 55)
+    bus.Write((ushort)codePtr++, 0x48);                                  // PHA          (Guardar A=55 en la pila)
+    bus.Write((ushort)codePtr++, 0x20); bus.Write((ushort)codePtr++, 0x00); bus.Write((ushort)codePtr++, 0x90); // JSR $9000  (Llamar subrutina, A se volverá 99)
+    bus.Write((ushort)codePtr++, 0x68);                                  // PLA          (Recuperar A de la pila, A vuelve a ser 55)
+    bus.Write((ushort)codePtr++, 0x00);                                  // BRK          (Fin)
 
-        // Cargaremos un gradiente de rojo
-        for (int i = 1; i < 16; i++)
-        {
-            // El valor de rojo va de 2 a 31
-            byte redValue = (byte)(i * 2);
-            ushort color = (ushort)(redValue & 0x1F); // Formato BGR555, solo componente R
-            ppu.Write(0x2122, (byte)(color & 0xFF));
-            ppu.Write(0x2122, (byte)(color >> 8));
-        }
+    // --- EJECUCIÓN ---
+    cpu.Reset();
+    cpu.PC = 0x8000;
+    
+    // Ejecutamos paso a paso hasta el BRK
+    for (int i = 0; i < 10; i++) // Un número suficiente de pasos para terminar
+    {
+        cpu.Step();
+    }
+    
+    Console.WriteLine("Ejecución finalizada.");
+    Console.WriteLine("--- Verificación Final ---");
+    Console.WriteLine($"Valor final del registro A: {cpu.A} (Esperado: 55)");
 
-        // --- 2. CARGAR DATOS DE UN TILE DE 4BPP (32 bytes) ---
-        // Este tile será un cuadrado que usa los 16 colores de la paleta.
-        byte[] tile4bpp = new byte[32];
-        for (int i = 0; i < 8; i++) // Para cada fila (8)
-        {
-            // Plano 0
-            tile4bpp[i * 2] = 0b11110000;
-            // Plano 1
-            tile4bpp[i * 2 + 1] = 0b11001100;
-            // Plano 2
-            tile4bpp[i * 2 + 16] = 0b10101010;
-            // Plano 3 (no se usa en esta prueba)
-            tile4bpp[i * 2 + 17] = 0b00000000;
-        }
+    if (cpu.A == 55)
+    {
+        Console.WriteLine("✅ ¡Éxito! Las subrutinas y la pila funcionan correctamente.");
+    }
+    else
+    {
+        Console.WriteLine("❌ Error en la lógica de subrutinas o pila.");
+    }
 
-        // Escribimos el tile en la nueva dirección base para tiles 4bpp (VRAM $2020 para Tile #1)
-        ppu.Write(0x2116, 0x20); ppu.Write(0x2117, 0x20);
-        for (int i = 0; i < tile4bpp.Length; i++) { ppu.Write(0x2118, tile4bpp[i]); }
-
-        // --- 3. CREAR EL TILEMAP ---
-        // Haremos que toda la pantalla muestre nuestro nuevo Tile #1
-        ppu.Write(0x2116, 0x00); ppu.Write(0x2117, 0x10); // Apuntar a VRAM $1000
-        for (int i = 0; i < 32 * 32; i++)
-        {
-            ushort tileInfo = 1; // Tile #1, Paleta #0
-            ppu.Write(0x2118, (byte)(tileInfo & 0xFF));
-            ppu.Write(0x2118, (byte)(tileInfo >> 8));
-        }
-
-        // Por ahora, quitamos la animación y los sprites para enfocarnos en el fondo
-        // window.Update += ...
-
-        window.Run();
+    // Quitamos la ventana por ahora para simplificar la prueba
+    // window.Run(); 
     }
 }

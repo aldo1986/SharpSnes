@@ -187,6 +187,42 @@ public class CPU
                 PC = (ushort)(lo | (hi << 8));
                 Console.WriteLine($"↪️ [CPU] Regresando de la interrupción a ${PC:X4}");
                 break;
+            case 0x48: // PHA - Push Accumulator
+                Push(A);
+                break;
+
+            case 0x68: // PLA - Pull Accumulator
+                A = Pop();
+                SetZeroAndNegativeFlags(A);
+                break;
+            // --- INSTRUCCIONES DE SUBRUTINA ---
+
+            case 0x20: // JSR - Jump to Subroutine
+                {
+                    // Leemos la dirección de la subrutina
+                    ushort subAddr = (ushort)(bus.Read(PC++) | (bus.Read(PC++) << 8));
+
+                    // Guardamos la dirección de retorno (la instrucción actual - 1) en la pila
+                    ushort returnAddr = (ushort)(PC - 1);
+                    Push((byte)(returnAddr >> 8));   // Byte alto primero
+                    Push((byte)(returnAddr & 0xFF)); // Byte bajo después
+
+                    // Saltamos a la subrutina
+                    PC = subAddr;
+                    break;
+                }
+
+            case 0x60: // RTS - Return from Subroutine
+                {
+                    // Sacamos la dirección de retorno de la pila
+                    byte low = Pop();
+                    byte high = Pop();
+                    ushort returnAddr = (ushort)(low | (high << 8));
+
+                    // Apuntamos el PC a la siguiente instrucción después de la llamada original
+                    PC = (ushort)(returnAddr + 1);
+                    break;
+                }
 
 
             default:
