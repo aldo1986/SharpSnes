@@ -151,6 +151,40 @@ class Program
         // Esta única llamada reemplaza todo el bloque Gl.Begin/End
         Gl.DrawElements(PrimitiveType.Triangles, (uint)Indices.Length, DrawElementsType.UnsignedInt, null);
     }
+    private static void OnUpdate(double deltaTime)
+    {
+        // --- 1. MANEJAR ENTRADA DEL CONTROL ---
+        if (primaryKeyboard != null)
+        {
+            bus.Controller1.SetButtonState((int)SnesButton.Up, primaryKeyboard.IsKeyPressed(Key.Up));
+            bus.Controller1.SetButtonState((int)SnesButton.Down, primaryKeyboard.IsKeyPressed(Key.Down));
+            bus.Controller1.SetButtonState((int)SnesButton.Left, primaryKeyboard.IsKeyPressed(Key.Left));
+            bus.Controller1.SetButtonState((int)SnesButton.Right, primaryKeyboard.IsKeyPressed(Key.Right));
+            bus.Controller1.SetButtonState((int)SnesButton.A, primaryKeyboard.IsKeyPressed(Key.A));
+            bus.Controller1.SetButtonState((int)SnesButton.B, primaryKeyboard.IsKeyPressed(Key.S));
+            bus.Controller1.SetButtonState((int)SnesButton.Start, primaryKeyboard.IsKeyPressed(Key.Enter));
+            bus.Controller1.SetButtonState((int)SnesButton.Select, primaryKeyboard.IsKeyPressed(Key.ShiftLeft));
+        }
+
+        // --- 2. EJECUTAR UN FOTOGRAMA COMPLETO DEL EMULADOR ---
+        const int totalScanlines = 262;
+        const int cyclesPerScanline = 100; // Simplificación del timing
+
+        for (int scanline = 0; scanline < totalScanlines; scanline++)
+        {
+            if (scanline == 224)
+            {
+                ppu.EnterVBlank();
+            }
+
+            // Ejecutar el CPU por el número de ciclos de esta línea
+            for (int i = 0; i < cyclesPerScanline; i++)
+            {
+                cpu.Step();
+            }
+        }
+    }
+
 
     private static void OnClose()
     {
@@ -164,61 +198,41 @@ class Program
     }
     static void Main(string[] args)
     {
-        // --- 1. CONFIGURACIÓN INICIAL ---
+        // --- 1. CONFIGURACIÓN DE LA VENTANA ---
         var options = WindowOptions.Default;
         options.Size = new Vector2D<int>(256 * 2, 224 * 2);
-        options.Title = "Mi Emulador de SNES - ¡Versión Final!";
-
+        options.Title = "Mi Emulador de SNES";
+        
         window = Window.Create(options);
         window.Load += OnLoad;
+        window.Update += OnUpdate;
         window.Render += OnRender;
         window.Closing += OnClose;
 
+        // --- 2. INICIALIZACIÓN DEL EMULADOR ---
         bus = new Bus();
         cpu = new CPU(bus);
         bus.ConnectCPU(cpu);
         ppu = bus.Ppu;
-
-        Console.WriteLine("Probando instrucciones de subrutinas y pila...");
-
-    // --- CÓDIGO DE PRUEBA ---
-    
-    // Subrutina en $9000: Carga 99 en A y regresa.
-    bus.Write(0x9000, 0xA9); bus.Write(0x9001, 99); // LDA #99
-    bus.Write(0x9002, 0x60);                      // RTS
-
-    // Programa Principal en $8000
-    int codePtr = 0x8000;
-    bus.Write((ushort)codePtr++, 0xA9); bus.Write((ushort)codePtr++, 55); // LDA #55      (A = 55)
-    bus.Write((ushort)codePtr++, 0x48);                                  // PHA          (Guardar A=55 en la pila)
-    bus.Write((ushort)codePtr++, 0x20); bus.Write((ushort)codePtr++, 0x00); bus.Write((ushort)codePtr++, 0x90); // JSR $9000  (Llamar subrutina, A se volverá 99)
-    bus.Write((ushort)codePtr++, 0x68);                                  // PLA          (Recuperar A de la pila, A vuelve a ser 55)
-    bus.Write((ushort)codePtr++, 0x00);                                  // BRK          (Fin)
-
-    // --- EJECUCIÓN ---
-    cpu.Reset();
-    cpu.PC = 0x8000;
-    
-    // Ejecutamos paso a paso hasta el BRK
-    for (int i = 0; i < 10; i++) // Un número suficiente de pasos para terminar
-    {
-        cpu.Step();
-    }
-    
-    Console.WriteLine("Ejecución finalizada.");
-    Console.WriteLine("--- Verificación Final ---");
-    Console.WriteLine($"Valor final del registro A: {cpu.A} (Esperado: 55)");
-
-    if (cpu.A == 55)
-    {
-        Console.WriteLine("✅ ¡Éxito! Las subrutinas y la pila funcionan correctamente.");
-    }
-    else
-    {
-        Console.WriteLine("❌ Error en la lógica de subrutinas o pila.");
-    }
-
-    // Quitamos la ventana por ahora para simplificar la prueba
-    // window.Run(); 
+        
+        // --- 3. CARGAR LA ROM ---
+        try
+        {
+            // Coloca una ROM llamada "test.smc" en la carpeta del ejecutable.
+            byte[] romBytes = File.ReadAllBytes("test.smc");
+            bus.LoadRom(romBytes);
+            Console.WriteLine($"✅ ROM cargada con éxito: {romBytes.Length} bytes.");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"❌ Error al cargar la ROM: {ex.Message}");
+            return; // Salir si no se puede cargar la ROM
+        }
+        
+        // --- 4. RESETEAR EL CPU Y CORRER ---
+        cpu.Reset();
+        Console.WriteLine($"▶️ CPU reseteado. PC inicial: ${cpu.PC:X4}");
+        
+        window.Run();
     }
 }

@@ -3,7 +3,7 @@ public class Bus
 {
     // El Bus ahora "posee" los componentes principales
     private readonly PPU _ppu;
-     private CPU cpu; // No es readonly para poder conectarlo después
+    private CPU cpu; // No es readonly para poder conectarlo después
     private readonly byte[] wram = new byte[128 * 1024];
     private byte[] romData = new byte[65536];
     public PPU Ppu => _ppu;
@@ -18,9 +18,15 @@ public class Bus
     {
         this.cpu = cpu;
     }
-    
+
     // El resto de los métodos de Bus...
-    public void LoadRom(byte[] rom) { /* sin cambios */ }
+    public void LoadRom(byte[] rom)
+    {
+        Console.WriteLine($"Cargando ROM de {rom.Length} bytes.");
+        this.romData = rom;
+        // Aquí leeríamos el header de la ROM para detectar si es LoROM, HiROM, etc.
+        // Por ahora, asumiremos que todas son LoROM.
+    }
     public void TriggerNMI()
     {
         cpu.RequestNMI();
@@ -28,54 +34,65 @@ public class Bus
 
     public byte Read(ushort address)
     {
-        // --- NUEVA RUTA PARA LA PPU ---
-        // Los registros de la PPU están en este rango
-        if (address == 0x4016)
-        {
-            return controller1.Read();
-        }
-        if (address >= 0x2100 && address <= 0x21FF)
-        {
-            return _ppu.Read(address);
-        }
+        int bank = address >> 8; // Simplificado, el banco real es más complejo
 
+        // Mapeo de WRAM ($0000-$1FFF en los bancos $7E y $7F)
         if (address >= 0x0000 && address <= 0x1FFF)
         {
             return wram[address];
         }
 
-        if (address >= 0x8000)
+        // Mapeo de Registros PPU ($2100-$21FF)
+        if (address >= 0x2100 && address <= 0x21FF)
         {
-            return romData[address];
+            return _ppu.Read(address);
         }
 
-        return 0;
+        // Mapeo de Controles ($4016)
+        if (address == 0x4016)
+        {
+            return controller1.Read();
+        }
+
+        // Mapeo de la ROM (LoROM)
+        // El contenido de la ROM se mapea en la mitad superior de los bancos ($8000-$FFFF)
+        if (address >= 0x8000)
+        {
+            // Calculamos el índice en el array de la ROM
+            // Esto es una simplificación, pero funciona para muchas ROMs LoROM.
+            int romAddress = (bank * 0x8000) + (address & 0x7FFF);
+            if (romAddress < romData.Length)
+            {
+                return romData[romAddress];
+            }
+        }
+
+        return 0; // Dirección no mapeada
     }
 
     public void Write(ushort address, byte data)
     {
-        if (address == 0x4016)
-        {
-            // Escribir un 1 y luego un 0 en $4016 resetea el contador de botones
-            if ((data & 1) == 0)
-            {
-                controller1.Strobe();
-            }
-        }
-        // --- NUEVA RUTA PARA LA PPU ---
-        if (address >= 0x2100 && address <= 0x21FF)
-        {
-            _ppu.Write(address, data);
-            return; // Importante para no seguir evaluando
-        }
-        
+        int bank = address >> 8;
+
+        // Mapeo de WRAM
         if (address >= 0x0000 && address <= 0x1FFF)
         {
             wram[address] = data;
+            return;
         }
-        else if (address >= 0x8000)
+
+        // Mapeo de Registros PPU
+        if (address >= 0x2100 && address <= 0x21FF)
         {
-            romData[address] = data;
+            _ppu.Write(address, data);
+            return;
+        }
+
+        // Mapeo de Controles
+        if (address == 0x4016)
+        {
+            if ((data & 1) == 0) controller1.Strobe();
+            return;
         }
     }
 }
