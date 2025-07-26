@@ -3,6 +3,7 @@ public class Controller
     // Un array para guardar el estado de cada botón
     private bool[] buttonStates = new bool[12]; // B, Y, Select, Start, Up, Down, Left, Right, A, X, L, R
     private int buttonIndex = 0;
+    public ushort JoypadState = 0;
 
     public byte Read()
     {

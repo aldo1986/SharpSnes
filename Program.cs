@@ -156,15 +156,28 @@ class Program
         // --- 1. MANEJAR ENTRADA DEL CONTROL ---
         if (primaryKeyboard != null)
         {
-            bus.Controller1.SetButtonState((int)SnesButton.Up, primaryKeyboard.IsKeyPressed(Key.Up));
-            bus.Controller1.SetButtonState((int)SnesButton.Down, primaryKeyboard.IsKeyPressed(Key.Down));
-            bus.Controller1.SetButtonState((int)SnesButton.Left, primaryKeyboard.IsKeyPressed(Key.Left));
-            bus.Controller1.SetButtonState((int)SnesButton.Right, primaryKeyboard.IsKeyPressed(Key.Right));
-            bus.Controller1.SetButtonState((int)SnesButton.A, primaryKeyboard.IsKeyPressed(Key.A));
-            bus.Controller1.SetButtonState((int)SnesButton.B, primaryKeyboard.IsKeyPressed(Key.S));
-            bus.Controller1.SetButtonState((int)SnesButton.Start, primaryKeyboard.IsKeyPressed(Key.Enter));
-            bus.Controller1.SetButtonState((int)SnesButton.Select, primaryKeyboard.IsKeyPressed(Key.ShiftLeft));
+            bus.controller1.SetButtonState((int)SnesButton.B, primaryKeyboard.IsKeyPressed(Key.S));
+            bus.controller1.SetButtonState((int)SnesButton.Y, primaryKeyboard.IsKeyPressed(Key.A));
+            bus.controller1.SetButtonState((int)SnesButton.Select, primaryKeyboard.IsKeyPressed(Key.ShiftLeft));
+            bus.controller1.SetButtonState((int)SnesButton.Start, primaryKeyboard.IsKeyPressed(Key.Enter));
+            bus.controller1.SetButtonState((int)SnesButton.Up, primaryKeyboard.IsKeyPressed(Key.Up));
+            bus.controller1.SetButtonState((int)SnesButton.Down, primaryKeyboard.IsKeyPressed(Key.Down));
+            bus.controller1.SetButtonState((int)SnesButton.Left, primaryKeyboard.IsKeyPressed(Key.Left));
+            bus.controller1.SetButtonState((int)SnesButton.Right, primaryKeyboard.IsKeyPressed(Key.Right));
+            bus.controller1.SetButtonState((int)SnesButton.A, primaryKeyboard.IsKeyPressed(Key.X));
+            bus.controller1.SetButtonState((int)SnesButton.X, primaryKeyboard.IsKeyPressed(Key.Z));
         }
+        bus.Write(0x004016, 1);
+        bus.Write(0x004016, 0);
+        ushort state = 0;
+        for (int i = 0; i < 12; i++) // Leemos los 12 botones
+        {
+            if (bus.Read(0x004016) == 1)
+            {
+                state |= (ushort)(1 << i);
+            }
+        }
+        bus.controller1.JoypadState = state;
 
         // --- 2. EJECUTAR UN FOTOGRAMA COMPLETO DEL EMULADOR ---
         const int totalScanlines = 262;
@@ -213,7 +226,7 @@ class Program
         bus = new Bus();
         cpu = new CPU(bus);
         bus.ConnectCPU(cpu);
-        ppu = bus.Ppu;
+        ppu = bus.ppu;
         
         // --- 3. CARGAR LA ROM ---
         try

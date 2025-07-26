@@ -1,741 +1,358 @@
 public class CPU
 {
-    private ushort _c; 
     // Registros
-    public ushort PC { get; set; }
-    public byte A
-    {
-        get => (byte)(_c & 0xFF);
-        set => _c = (ushort)((_c & 0xFF00) | value);
-    }
-    public byte B // Acumulador B (parte alta de C)
-    {
-        get => (byte)(_c >> 8);
-        set => _c = (ushort)((value << 8) | (_c & 0xFF));
-    }
-    public ushort C // Acumulador C de 16-bit
-    {
-        get => _c;
-        set => _c = value;
-    }
-    public ushort SP { get; set; } // Stack Pointer ahora es de 16-bit
+    private ushort _c;
+    public byte A { get => (byte)(_c & 0xFF); set => _c = (ushort)((_c & 0xFF00) | value); }
+    public byte B { get => (byte)(_c >> 8); set => _c = (ushort)((value << 8) | (_c & 0xFF)); }
+    public ushort C { get => _c; set => _c = value; }
+    public ushort SP { get; set; }
     public ushort DP { get; set; }
     public byte DBR { get; set; }
     public byte PBR { get; set; }
     public byte X { get; set; }
     public byte Y { get; set; }
     public StatusFlags P { get; set; }
-
-    // Conexión al Bus de Memoria
-    private readonly Bus bus;
+    public ushort PC { get; set; }
+    private bool EmulationMode = true;
     private bool nmiPending = false;
+    private readonly Bus bus;
 
-    public CPU(Bus bus)
-    {
-        this.bus = bus;
-    }
-    public void RequestNMI()
-    {
+    public CPU(Bus bus) { this.bus = bus; }
+    public void RequestNMI() { nmiPending = true; }
 
-        Console.WriteLine("❤️ [CPU] ¡Interrupción NMI recibida!");
-        nmiPending = true;
-    }
-    private void Push(byte data)
-    {
-        // La pila en la SNES vive en la página $01 de la RAM ($0100-$01FF)
-        // y crece hacia abajo.
-        bus.Write(SP, data);
-        SP--;
-    }
-    // Método para sacar un byte de la pila
-    private byte Pop()
-    {
-        SP++;
-        return bus.Read(SP);
-    }
-    private void HandleNMI()
-    {
-        Console.WriteLine("❤️ [CPU] Atendiendo NMI...");
-        nmiPending = false;
+    private uint GetAddress(byte bank, ushort offset) => (uint)((bank << 16) | offset);
+    private void Push(byte data) { bus.Write(SP--, data); }
+    private byte Pop() { return bus.Read(++SP); }
+    private void SetZeroAndNegativeFlags(byte value) { /* ... sin cambios ... */ }
+    private void SetZeroAndNegativeFlags16(ushort value) { /* ... sin cambios ... */ }
 
-        // 1. Guardar el estado actual en la pila
-        Push((byte)(PC >> 8));   // Guardar byte alto del PC
-        Push((byte)(PC & 0xFF)); // Guardar byte bajo del PC
-        Push((byte)P);           // Guardar registro de estado
-
-        // 2. Saltar a la dirección del vector NMI
-        ushort lowByte = bus.Read(0xFFFA);
-        ushort highByte = bus.Read(0xFFFB);
-        PC = (ushort)(lowByte | (highByte << 8));
-        Console.WriteLine($"❤️ [CPU] Saltando al manejador de NMI en ${PC:X4}");
-    }
     public void Reset()
     {
-        // ... (código de Reset) ...
-        DP = 0;
-        DBR = 0;
-        PBR = 0;
-        SP = 0x01FF; // La pila empieza en la parte alta y crece hacia abajo
+        ushort lowByte = bus.Read(0x00FFFC);
+        ushort highByte = bus.Read(0x00FFFD);
+        PC = (ushort)(lowByte | (highByte << 8));
+
+        PBR = 0; DBR = 0; DP = 0;
+        SP = 0x01FF;
+        A = 0; X = 0; Y = 0; B = 0;
+        EmulationMode = true;
+        P = StatusFlags.InterruptDisable;
     }
 
+    private void HandleNMI() { /* ... sin cambios ... */ }
 
-
-    private void SetZeroAndNegativeFlags(byte value)
-    {
-        P = (value == 0) ? (P | StatusFlags.Zero) : (P & ~StatusFlags.Zero);
-        P = ((value & 0x80) != 0) ? (P | StatusFlags.Negative) : (P & ~StatusFlags.Negative);
-    }
-    private void SetZeroAndNegativeFlags16(ushort value)
-    {
-        P = (value == 0) ? (P | StatusFlags.Zero) : (P & ~StatusFlags.Zero);
-        // El flag Negative se basa en el bit 15
-        P = ((value & 0x8000) != 0) ? (P | StatusFlags.Negative) : (P & ~StatusFlags.Negative);
-    }
     public void Step()
     {
-        // Revisa si hay una interrupción NMI pendiente antes de ejecutar la instrucción.
-        if (nmiPending)
-        {
-            HandleNMI();
-        }
+        if (nmiPending) HandleNMI();
 
-        // Ejecuta una sola instrucción.
-        byte opcode = bus.Read(PC++);
+        uint currentPCAddr = GetAddress(PBR, PC);
+        byte opcode = bus.Read(currentPCAddr);
+        PC++;
 
-        // El switch con todos los opcodes va aquí, sin el bucle while.
         switch (opcode)
         {
-            // ... todos tus 'case' para las instrucciones ...
+            // Opcodes implementados...
+            #region Opcodes
+            case 0x00: break; // BRK
+            case 0x01: { byte o = bus.Read(GetAddress(PBR, PC++)); ushort i = (ushort)((DP + o + X) & 0xFFFF); ushort f = (ushort)(bus.Read(GetAddress(DBR, i)) | (bus.Read(GetAddress(DBR, (ushort)(i + 1))) << 8)); byte v = bus.Read(GetAddress(DBR, f)); A |= v; SetZeroAndNegativeFlags(A); break; } // ORA (DP,X),I
+            case 0x02: { ushort r = (ushort)(PC + 1); Push((byte)(r >> 8)); Push((byte)(r & 0xFF)); Push((byte)P); ushort l = bus.Read(0x00FFF4); ushort h = bus.Read(0x00FFF5); PC = (ushort)(l | (h << 8)); break; } // COP
+            case 0x03: { byte o = bus.Read(GetAddress(PBR, PC++)); ushort a = (ushort)(SP + o); byte v = bus.Read(GetAddress(DBR, a)); A |= v; SetZeroAndNegativeFlags(A); break; } // ORA S
+            case 0x04: { byte o = bus.Read(GetAddress(PBR, PC++)); ushort a = (ushort)((DP + o) & 0xFFFF); byte v = bus.Read(GetAddress(DBR, a)); P = (A & v) == 0 ? (P | StatusFlags.Zero) : (P & ~StatusFlags.Zero); v |= A; bus.Write(GetAddress(DBR, a), v); break; } // TSB DP
+            case 0x05: { byte o = bus.Read(GetAddress(PBR, PC++)); ushort a = (ushort)((DP + o) & 0xFFFF); byte v = bus.Read(GetAddress(DBR, a)); A |= v; SetZeroAndNegativeFlags(A); break; } // ORA DP
+            case 0x08: Push((byte)P); break; // PHP
+            case 0x09: { byte v = bus.Read(GetAddress(PBR, PC++)); A |= v; SetZeroAndNegativeFlags(A); break; } // ORA #
+            case 0x0A: { P = (A & 0x80) != 0 ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry); A <<= 1; SetZeroAndNegativeFlags(A); break; } // ASL A
+            case 0x0D: { ushort a = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); byte v = bus.Read(GetAddress(DBR, a)); A |= v; SetZeroAndNegativeFlags(A); break; } // ORA A
+            case 0x0E: { ushort a = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); byte v = bus.Read(GetAddress(DBR, a)); P = (v & 0x80) != 0 ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry); v <<= 1; bus.Write(GetAddress(DBR, a), v); SetZeroAndNegativeFlags(v); break; } // ASL A
+            case 0x10: { sbyte o = (sbyte)bus.Read(GetAddress(PBR, PC++)); if (!P.HasFlag(StatusFlags.Negative)) PC = (ushort)(PC + o); break; } // BPL
+            case 0x13: { byte o = bus.Read(GetAddress(PBR, PC++)); ushort i = (ushort)(SP + o); ushort b = (ushort)(bus.Read(GetAddress(DBR, i)) | (bus.Read(GetAddress(DBR, (ushort)(i + 1))) << 8)); ushort f = (ushort)(b + Y); byte v = bus.Read(GetAddress(DBR, f)); A |= v; SetZeroAndNegativeFlags(A); break; } // ORA (S,Y)
+            case 0x14: { byte o = bus.Read(GetAddress(PBR, PC++)); ushort a = (ushort)((DP + o) & 0xFFFF); byte v = bus.Read(GetAddress(DBR, a)); P = (A & v) == 0 ? (P | StatusFlags.Zero) : (P & ~StatusFlags.Zero); v &= (byte)~A; bus.Write(GetAddress(DBR, a), v); break; } // TRB DP
+            case 0x18: P &= ~StatusFlags.Carry; break; // CLC
+            case 0x19: { ushort b = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); ushort f = (ushort)(b + Y); byte v = bus.Read(GetAddress(DBR, f)); A |= v; SetZeroAndNegativeFlags(A); break; } // ORA A,Y
+            case 0x1A: A++; SetZeroAndNegativeFlags(A); break; // INC A
+            case 0x1B: SP = C; break; // TCS
+            case 0x1F: { ushort l = bus.Read(GetAddress(PBR, PC++)); ushort h = bus.Read(GetAddress(PBR, PC++)); byte b = bus.Read(GetAddress(PBR, PC++)); uint ba = (uint)((b << 16) | (h << 8) | l); uint f = ba + X; byte v = bus.Read(f); A |= v; SetZeroAndNegativeFlags(A); break; } // ORA AL,X
+            case 0x20: { ushort s = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); ushort r = (ushort)(PC - 1); Push((byte)(r >> 8)); Push((byte)(r & 0xFF)); PC = s; break; } // JSR
+            case 0x21: { byte o = bus.Read(GetAddress(PBR, PC++)); ushort i = (ushort)((DP + o + X) & 0xFFFF); ushort f = (ushort)(bus.Read(GetAddress(DBR, i)) | (bus.Read(GetAddress(DBR, (ushort)(i + 1))) << 8)); byte v = bus.Read(GetAddress(DBR, f)); A &= v; SetZeroAndNegativeFlags(A); break; } // AND (DP,X),I
+            case 0x29: { byte v = bus.Read(GetAddress(PBR, PC++)); A &= v; SetZeroAndNegativeFlags(A); break; } // AND #
+            case 0x2C: { ushort a = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); byte v = bus.Read(GetAddress(DBR, a)); P = (A & v) == 0 ? (P | StatusFlags.Zero) : (P & ~StatusFlags.Zero); P = (v & 0x80) != 0 ? (P | StatusFlags.Negative) : (P & ~StatusFlags.Negative); P = (v & 0x40) != 0 ? (P | StatusFlags.Overflow) : (P & ~StatusFlags.Overflow); break; } // BIT A
+            case 0x2D: { ushort a = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); byte v = bus.Read(GetAddress(DBR, a)); A &= v; SetZeroAndNegativeFlags(A); break; } // AND A
+            case 0x2F: { ushort l = bus.Read(GetAddress(PBR, PC++)); ushort h = bus.Read(GetAddress(PBR, PC++)); byte b = bus.Read(GetAddress(PBR, PC++)); uint f = (uint)((b << 16) | (h << 8) | l); byte v = bus.Read(f); A &= v; SetZeroAndNegativeFlags(A); break; } // AND AL
+            case 0x30: { sbyte o = (sbyte)bus.Read(GetAddress(PBR, PC++)); if (P.HasFlag(StatusFlags.Negative)) PC = (ushort)(PC + o); break; } // BMI
+            case 0x33: { byte o = bus.Read(GetAddress(PBR, PC++)); ushort a = (ushort)(SP + o); byte v = bus.Read(GetAddress(DBR, a)); A ^= v; SetZeroAndNegativeFlags(A); break; } // EOR S
+            case 0x38: P |= StatusFlags.Carry; break; // SEC
+            case 0x3A: A--; SetZeroAndNegativeFlags(A); break; // DEC A
+            case 0x3B: C = SP; SetZeroAndNegativeFlags16(C); break; // TSC
+            case 0x3E: { ushort b = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); ushort f = (ushort)(b + X); byte v = bus.Read(GetAddress(DBR, f)); bool oc = P.HasFlag(StatusFlags.Carry); P = (v & 0x80) != 0 ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry); v <<= 1; if (oc) v |= 1; bus.Write(GetAddress(DBR, f), v); SetZeroAndNegativeFlags(v); break; } // ROL A,X
+            case 0x3F: { ushort l = bus.Read(GetAddress(PBR, PC++)); ushort h = bus.Read(GetAddress(PBR, PC++)); byte b = bus.Read(GetAddress(PBR, PC++)); uint ba = (uint)((b << 16) | (h << 8) | l); uint f = ba + X; byte v = bus.Read(f); A &= v; SetZeroAndNegativeFlags(A); break; } // AND AL,X
+            case 0x40: { P = (StatusFlags)Pop(); byte l = Pop(); byte h = Pop(); PC = (ushort)(l | (h << 8)); break; } // RTI
+            case 0x42: PC++; break; // WDM
+            case 0x48: Push(A); break; // PHA
+            case 0x4B: Push(PBR); break; // PHK
+            case 0x4C: PC = (ushort)(bus.Read(GetAddress(PBR, PC)) | (bus.Read(GetAddress(PBR, (ushort)(PC + 1))) << 8)); break; // JMP A
+            case 0x4D: { ushort a = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); byte v = bus.Read(GetAddress(DBR, a)); A ^= v; SetZeroAndNegativeFlags(A); break; } // EOR A
+            case 0x4E: { ushort a = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); byte v = bus.Read(GetAddress(DBR, a)); P = (v & 1) == 1 ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry); v >>= 1; bus.Write(GetAddress(DBR, a), v); P = v == 0 ? (P | StatusFlags.Zero) : (P & ~StatusFlags.Zero); P &= ~StatusFlags.Negative; break; } // LSR A
+            case 0x51: { byte o = bus.Read(GetAddress(PBR, PC++)); ushort i = (ushort)((DP + o) & 0xFFFF); ushort b = (ushort)(bus.Read(GetAddress(DBR, i)) | (bus.Read(GetAddress(DBR, (ushort)(i + 1))) << 8)); ushort f = (ushort)(b + Y); byte v = bus.Read(GetAddress(DBR, f)); A ^= v; SetZeroAndNegativeFlags(A); break; } // EOR (DP),Y
+            case 0x57: { byte o = bus.Read(GetAddress(PBR, PC++)); ushort i = (ushort)((DP + o) & 0xFFFF); ushort l = bus.Read(GetAddress(DBR, i)); ushort h = bus.Read(GetAddress(DBR, (ushort)(i + 1))); ushort b = bus.Read(GetAddress(DBR, (ushort)(i + 2))); uint f = (uint)((b << 16) | (h << 8) | l); byte v = bus.Read(f); A ^= v; SetZeroAndNegativeFlags(A); break; } // EOR [DP],Y
+            case 0x5A: Push(Y); break; // PHY
+            case 0x5C: { ushort l = bus.Read(GetAddress(PBR, PC++)); ushort h = bus.Read(GetAddress(PBR, PC++)); byte b = bus.Read(GetAddress(PBR, PC++)); PC = (ushort)(l | (h << 8)); PBR = b; break; } // JML AL
+            case 0x5E: { ushort b = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); ushort f = (ushort)(b + X); byte v = bus.Read(GetAddress(DBR, f)); P = (v & 1) == 1 ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry); v >>= 1; bus.Write(GetAddress(DBR, f), v); P = v == 0 ? (P | StatusFlags.Zero) : (P & ~StatusFlags.Zero); P &= ~StatusFlags.Negative; break; } // LSR A,X
+            case 0x5F: { ushort l = bus.Read(GetAddress(PBR, PC++)); ushort h = bus.Read(GetAddress(PBR, PC++)); byte b = bus.Read(GetAddress(PBR, PC++)); uint ba = (uint)((b << 16) | (h << 8) | l); uint f = ba + X; byte v = bus.Read(f); A ^= v; SetZeroAndNegativeFlags(A); break; } // EOR AL,X
+            case 0x60: { byte l = Pop(); byte h = Pop(); ushort r = (ushort)(l | (h << 8)); PC = (ushort)(r + 1); break; } // RTS
+            case 0x64: { byte o = bus.Read(GetAddress(PBR, PC++)); ushort a = (ushort)((DP + o) & 0xFFFF); bus.Write(GetAddress(DBR, a), 0); break; } // STZ DP
+            case 0x68: A = Pop(); SetZeroAndNegativeFlags(A); break; // PLA
+            case 0x69: { byte v = bus.Read(GetAddress(PBR, PC++)); int c = P.HasFlag(StatusFlags.Carry) ? 1 : 0; int s = A + v + c; P = (s > 255) ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry); P = (((A ^ s) & (v ^ s) & 0x80) != 0) ? (P | StatusFlags.Overflow) : (P & ~StatusFlags.Overflow); A = (byte)s; SetZeroAndNegativeFlags(A); break; } // ADC #
+            case 0x6A: { bool oc = P.HasFlag(StatusFlags.Carry); P = (A & 0x80) != 0 ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry); A <<= 1; if (oc) A |= 1; SetZeroAndNegativeFlags(A); break; } // ROL A
+            case 0x6D: { ushort a = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); byte v = bus.Read(GetAddress(DBR, a)); int c = P.HasFlag(StatusFlags.Carry) ? 1 : 0; int s = A + v + c; P = (s > 255) ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry); P = (((A ^ s) & (v ^ s) & 0x80) != 0) ? (P | StatusFlags.Overflow) : (P & ~StatusFlags.Overflow); A = (byte)s; SetZeroAndNegativeFlags(A); break; } // ADC A
+            case 0x70: { sbyte o = (sbyte)bus.Read(GetAddress(PBR, PC++)); if (P.HasFlag(StatusFlags.Overflow)) PC = (ushort)(PC + o); break; } // BVS
+            case 0x77: { byte o = bus.Read(GetAddress(PBR, PC++)); ushort i = (ushort)((DP + o) & 0xFFFF); ushort l = bus.Read(GetAddress(DBR, i)); ushort h = bus.Read(GetAddress(DBR, (ushort)(i + 1))); ushort b = bus.Read(GetAddress(DBR, (ushort)(i + 2))); uint f = (uint)((b << 16) | (h << 8) | l); byte v = bus.Read(f); int c = P.HasFlag(StatusFlags.Carry) ? 1 : 0; int s = A + v + c; P = (s > 255) ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry); P = (((A ^ s) & (v ^ s) & 0x80) != 0) ? (P | StatusFlags.Overflow) : (P & ~StatusFlags.Overflow); A = (byte)s; SetZeroAndNegativeFlags(A); break; } // ADC [DP],Y
+            case 0x7F: { ushort l = bus.Read(GetAddress(PBR, PC++)); ushort h = bus.Read(GetAddress(PBR, PC++)); byte b = bus.Read(GetAddress(PBR, PC++)); uint ba = (uint)((b << 16) | (h << 8) | l); uint f = ba + X; byte v = bus.Read(f); int c = P.HasFlag(StatusFlags.Carry) ? 1 : 0; int s = A + v + c; P = (s > 255) ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry); P = (((A ^ s) & (v ^ s) & 0x80) != 0) ? (P | StatusFlags.Overflow) : (P & ~StatusFlags.Overflow); A = (byte)s; SetZeroAndNegativeFlags(A); break; } // ADC AL,X
+            case 0x80: { sbyte o = (sbyte)bus.Read(GetAddress(PBR, PC++)); PC = (ushort)(PC + o); break; } // BRA
+            case 0x81: { byte o = bus.Read(GetAddress(PBR, PC++)); ushort i = (ushort)((DP + o + X) & 0xFFFF); ushort f = (ushort)(bus.Read(GetAddress(DBR, i)) | (bus.Read(GetAddress(DBR, (ushort)(i + 1))) << 8)); bus.Write(GetAddress(DBR, f), A); break; } // STA (DP,X),I
+            case 0x82: { short o = (short)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); PC = (ushort)(PC + o); break; } // BRL
+            case 0x86: { byte o = bus.Read(GetAddress(PBR, PC++)); ushort a = (ushort)((DP + o) & 0xFFFF); bus.Write(GetAddress(DBR, a), X); break; } // STX DP
+            case 0x8B: Push(DBR); break; // PHB
+            case 0x8C: { ushort a = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); bus.Write(GetAddress(DBR, a), Y); break; } // STY A
+            case 0x8D: { ushort a = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); bus.Write(GetAddress(DBR, a), A); break; } // STA A
+            case 0x8E: { ushort a = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); bus.Write(GetAddress(DBR, a), X); break; } // STX A
+            case 0x8F: { ushort l = bus.Read(GetAddress(PBR, PC++)); ushort h = bus.Read(GetAddress(PBR, PC++)); byte b = bus.Read(GetAddress(PBR, PC++)); uint f = (uint)((b << 16) | (h << 8) | l); bus.Write(f, A); break; } // STA AL
+            case 0x90: { sbyte o = (sbyte)bus.Read(GetAddress(PBR, PC++)); if (!P.HasFlag(StatusFlags.Carry)) PC = (ushort)(PC + o); break; } // BCC
+            case 0x97: { byte o = bus.Read(GetAddress(PBR, PC++)); ushort i = (ushort)((DP + o) & 0xFFFF); ushort l = bus.Read(GetAddress(DBR, i)); ushort h = bus.Read(GetAddress(DBR, (ushort)(i + 1))); ushort b = bus.Read(GetAddress(DBR, (ushort)(i + 2))); uint ba = (uint)((b << 16) | (h << 8) | l); uint f = ba + Y; bus.Write(f, A); break; } // STA [DP],Y
+            case 0x99: { ushort b = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); ushort f = (ushort)(b + Y); bus.Write(GetAddress(DBR, f), A); break; } // STA A,Y
+            case 0x9B: Y = X; SetZeroAndNegativeFlags(Y); break; // TXY
+            case 0x9C: { ushort a = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); bus.Write(GetAddress(DBR, a), 0); break; } // STZ A
+            case 0x9D: { ushort b = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); ushort f = (ushort)(b + X); bus.Write(GetAddress(DBR, f), A); break; } // STA A,X
+            case 0x9E: { ushort b = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); ushort f = (ushort)(b + X); bus.Write(GetAddress(DBR, f), 0); break; } // STZ A,X
+            case 0xA0: Y = bus.Read(GetAddress(PBR, PC++)); SetZeroAndNegativeFlags(Y); break; // LDY #
+            case 0xA5: { byte o = bus.Read(GetAddress(PBR, PC++)); ushort a = (ushort)((DP + o) & 0xFFFF); A = bus.Read(GetAddress(DBR, a)); SetZeroAndNegativeFlags(A); break; } // LDA DP
+            case 0xA7: { byte o = bus.Read(GetAddress(PBR, PC++)); ushort i = (ushort)((DP + o) & 0xFFFF); ushort l = bus.Read(GetAddress(DBR, i)); ushort h = bus.Read(GetAddress(DBR, (ushort)(i + 1))); ushort b = bus.Read(GetAddress(DBR, (ushort)(i + 2))); uint f = (uint)((b << 16) | (h << 8) | l); A = bus.Read(f); SetZeroAndNegativeFlags(A); break; } // LDA [DP]
+            case 0xAA: X = A; SetZeroAndNegativeFlags(X); break; // TAX
+            case 0xAB: DBR = Pop(); SetZeroAndNegativeFlags(DBR); break; // PLB
+            case 0xAC: { ushort a = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); Y = bus.Read(GetAddress(DBR, a)); SetZeroAndNegativeFlags(Y); break; } // LDY A
+            case 0xAE: { ushort a = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); X = bus.Read(GetAddress(DBR, a)); SetZeroAndNegativeFlags(X); break; } // LDX A
+            case 0xB2: { byte o = bus.Read(GetAddress(PBR, PC++)); ushort i = (ushort)((DP + o) & 0xFFFF); ushort f = (ushort)(bus.Read(GetAddress(DBR, i)) | (bus.Read(GetAddress(DBR, (ushort)(i + 1))) << 8)); A = bus.Read(GetAddress(DBR, f)); SetZeroAndNegativeFlags(A); break; } // LDA (DP)
+            case 0xB7: { byte o = bus.Read(GetAddress(PBR, PC++)); ushort i = (ushort)((DP + o) & 0xFFFF); ushort l = bus.Read(GetAddress(DBR, i)); ushort h = bus.Read(GetAddress(DBR, (ushort)(i + 1))); ushort b = bus.Read(GetAddress(DBR, (ushort)(i + 2))); uint ba = (uint)((b << 16) | (h << 8) | l); uint f = ba + Y; A = bus.Read(f); SetZeroAndNegativeFlags(A); break; } // LDA [DP],Y
+            case 0xBD: { ushort b = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); ushort f = (ushort)(b + X); A = bus.Read(GetAddress(DBR, f)); SetZeroAndNegativeFlags(A); break; } // LDA A,X
+            case 0xBE: { ushort b = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); ushort f = (ushort)(b + Y); X = bus.Read(GetAddress(DBR, f)); SetZeroAndNegativeFlags(X); break; } // LDX A,Y
+            case 0xBF: { ushort l = bus.Read(GetAddress(PBR, PC++)); ushort h = bus.Read(GetAddress(PBR, PC++)); byte b = bus.Read(GetAddress(PBR, PC++)); uint ba = (uint)((b << 16) | (h << 8) | l); uint f = ba + X; A = bus.Read(f); SetZeroAndNegativeFlags(A); break; } // LDA AL,X
+            case 0xC0: { byte v = bus.Read(GetAddress(PBR, PC++)); byte r = (byte)(Y - v); SetZeroAndNegativeFlags(r); P = (Y >= v) ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry); break; } // CPY #
+            case 0xC2: P &= ~(StatusFlags)bus.Read(GetAddress(PBR, PC++)); break; // REP
+            case 0xC8: Y++; SetZeroAndNegativeFlags(Y); break; // INY
+            case 0xC9: { byte v = bus.Read(GetAddress(PBR, PC++)); byte r = (byte)(A - v); SetZeroAndNegativeFlags(r); P = (A >= v) ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry); break; } // CMP #
+            case 0xCD: { ushort a = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); byte v = bus.Read(GetAddress(DBR, a)); byte r = (byte)(A - v); SetZeroAndNegativeFlags(r); P = (A >= v) ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry); break; } // CMP A
+            case 0xCE: { ushort a = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); byte v = bus.Read(GetAddress(DBR, a)); v--; bus.Write(GetAddress(DBR, a), v); SetZeroAndNegativeFlags(v); break; } // DEC A
+            case 0xD3: { byte o = bus.Read(GetAddress(PBR, PC++)); ushort i = (ushort)(SP + o); ushort b = (ushort)(bus.Read(GetAddress(DBR, i)) | (bus.Read(GetAddress(DBR, (ushort)(i + 1))) << 8)); ushort f = (ushort)(b + Y); byte v = bus.Read(GetAddress(DBR, f)); A |= v; SetZeroAndNegativeFlags(A); break; } // ORA (S,Y)
+            case 0xD4: { byte o = bus.Read(GetAddress(PBR, PC++)); ushort i = (ushort)((DP + o) & 0xFFFF); ushort e = (ushort)(bus.Read(GetAddress(DBR, i)) | (bus.Read(GetAddress(DBR, (ushort)(i + 1))) << 8)); Push((byte)(e >> 8)); Push((byte)(e & 0xFF)); break; } // PEI
+            case 0xD5: { byte o = bus.Read(GetAddress(PBR, PC++)); ushort a = (ushort)((DP + o + X) & 0xFFFF); byte v = bus.Read(GetAddress(DBR, a)); byte r = (byte)(A - v); SetZeroAndNegativeFlags(r); P = (A >= v) ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry); break; } // CMP DP,X
+            case 0xD6: { byte o = bus.Read(GetAddress(PBR, PC++)); ushort f = (ushort)((DP + o + X) & 0xFFFF); byte v = bus.Read(GetAddress(DBR, f)); v--; bus.Write(GetAddress(DBR, f), v); SetZeroAndNegativeFlags(v); break; } // DEC DP,X
+            case 0xDA: Push(X); break; // PHX
+            case 0xDC: { ushort i = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); ushort l = bus.Read(GetAddress(DBR, i)); ushort h = bus.Read(GetAddress(DBR, (ushort)(i + 1))); byte b = bus.Read(GetAddress(DBR, (ushort)(i + 2))); PC = (ushort)(l | (h << 8)); PBR = b; break; } // JMP [AL]
+            case 0xDE: { ushort b = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); ushort f = (ushort)(b + X); byte v = bus.Read(GetAddress(DBR, f)); v--; bus.Write(GetAddress(DBR, f), v); SetZeroAndNegativeFlags(v); break; } // DEC A,X
+            case 0xDF: { ushort l = bus.Read(GetAddress(PBR, PC++)); ushort h = bus.Read(GetAddress(PBR, PC++)); byte b = bus.Read(GetAddress(PBR, PC++)); uint ba = (uint)((b << 16) | (h << 8) | l); uint f = ba + X; byte v = bus.Read(f); byte r = (byte)(A - v); SetZeroAndNegativeFlags(r); P = (A >= v) ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry); break; } // CMP AL,X
+            case 0xE1: { byte o = bus.Read(GetAddress(PBR, PC++)); ushort i = (ushort)((DP + o + X) & 0xFFFF); ushort f = (ushort)(bus.Read(GetAddress(DBR, i)) | (bus.Read(GetAddress(DBR, (ushort)(i + 1))) << 8)); byte v = bus.Read(GetAddress(DBR, f)); int c = P.HasFlag(StatusFlags.Carry) ? 1 : 0; int d = A - v - (1 - c); P = (d >= 0) ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry); P = (((A ^ d) & (~v ^ d) & 0x80) != 0) ? (P | StatusFlags.Overflow) : (P & ~StatusFlags.Overflow); A = (byte)d; SetZeroAndNegativeFlags(A); break; } // SBC (DP,X),I
+            case 0xE2: P |= (StatusFlags)bus.Read(GetAddress(PBR, PC++)); break; // SEP
+            case 0xE4: { byte a = bus.Read(GetAddress(PBR, PC++)); byte v = bus.Read(GetAddress(DBR, a)); byte r = (byte)(X - v); SetZeroAndNegativeFlags(r); P = (X >= v) ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry); break; } // CPX DP
+            case 0xEA: break; // NOP
+            case 0xED: { ushort a = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); byte v = bus.Read(GetAddress(DBR, a)); int c = P.HasFlag(StatusFlags.Carry) ? 1 : 0; int d = A - v - (1 - c); P = (d >= 0) ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry); P = (((A ^ d) & (~v ^ d) & 0x80) != 0) ? (P | StatusFlags.Overflow) : (P & ~StatusFlags.Overflow); A = (byte)d; SetZeroAndNegativeFlags(A); break; } // SBC A
+            case 0xEF: { ushort l = bus.Read(GetAddress(PBR, PC++)); ushort h = bus.Read(GetAddress(PBR, PC++)); byte b = bus.Read(GetAddress(PBR, PC++)); uint f = (uint)((b << 16) | (h << 8) | l); byte v = bus.Read(f); int c = P.HasFlag(StatusFlags.Carry) ? 1 : 0; int d = A - v - (1 - c); P = (d >= 0) ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry); P = (((A ^ d) & (~v ^ d) & 0x80) != 0) ? (P | StatusFlags.Overflow) : (P & ~StatusFlags.Overflow); A = (byte)d; SetZeroAndNegativeFlags(A); break; } // SBC AL
+            case 0xF0: { sbyte o = (sbyte)bus.Read(GetAddress(PBR, PC++)); if (P.HasFlag(StatusFlags.Zero)) PC = (ushort)(PC + o); break; } // BEQ
+            case 0xF1: { byte o = bus.Read(GetAddress(PBR, PC++)); ushort i = (ushort)((DP + o) & 0xFFFF); ushort f = (ushort)(bus.Read(GetAddress(DBR, i)) | (bus.Read(GetAddress(DBR, (ushort)(i + 1))) << 8)); byte v = bus.Read(GetAddress(DBR, f)); int c = P.HasFlag(StatusFlags.Carry) ? 1 : 0; int s = A + v + c; P = (s > 255) ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry); P = (((A ^ s) & (v ^ s) & 0x80) != 0) ? (P | StatusFlags.Overflow) : (P & ~StatusFlags.Overflow); A = (byte)s; SetZeroAndNegativeFlags(A); break; } // ADC (DP),Y
+            case 0xF3: { byte o = bus.Read(GetAddress(PBR, PC++)); ushort f = (ushort)(SP + o); byte v = bus.Read(GetAddress(DBR, f)); int c = P.HasFlag(StatusFlags.Carry) ? 1 : 0; int d = A - v - (1 - c); P = (d >= 0) ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry); P = (((A ^ d) & (~v ^ d) & 0x80) != 0) ? (P | StatusFlags.Overflow) : (P & ~StatusFlags.Overflow); A = (byte)d; SetZeroAndNegativeFlags(A); break; } // SBC S
+            case 0xF4: { ushort v = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); Push((byte)(v >> 8)); Push((byte)(v & 0xFF)); break; } // PEA
+            case 0xF5: { byte o = bus.Read(GetAddress(PBR, PC++)); ushort a = (ushort)((DP + o + X) & 0xFFFF); byte v = bus.Read(GetAddress(DBR, a)); int c = P.HasFlag(StatusFlags.Carry) ? 1 : 0; int d = A - v - (1 - c); P = (d >= 0) ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry); P = (((A ^ d) & (~v ^ d) & 0x80) != 0) ? (P | StatusFlags.Overflow) : (P & ~StatusFlags.Overflow); A = (byte)d; SetZeroAndNegativeFlags(A); break; } // SBC DP,X
+            case 0xF8: P |= StatusFlags.DecimalMode; break; // SED
+            case 0xF9: { ushort b = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); ushort f = (ushort)(b + Y); byte v = bus.Read(GetAddress(DBR, f)); int c = P.HasFlag(StatusFlags.Carry) ? 1 : 0; int d = A - v - (1 - c); P = (d >= 0) ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Overflow); P = (((A ^ d) & (~v ^ d) & 0x80) != 0) ? (P | StatusFlags.Overflow) : (P & ~StatusFlags.Overflow); A = (byte)d; SetZeroAndNegativeFlags(A); break; } // SBC A,Y
+            case 0xFB: { bool oc = P.HasFlag(StatusFlags.Carry); if (EmulationMode) P |= StatusFlags.Carry; else P &= ~StatusFlags.Carry; EmulationMode = oc; if (EmulationMode) { X &= 0xFF; Y &= 0xFF; SP = (ushort)(0x0100 | (SP & 0xFF)); } break; } // XCE
+            case 0xFC: { ushort i = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); ushort f = (ushort)(bus.Read(GetAddress(DBR, i)) | (bus.Read(GetAddress(DBR, (ushort)(i + 1))) << 8)); ushort r = (ushort)(PC - 1); Push((byte)(r >> 8)); Push((byte)(r & 0xFF)); PC = f; break; } // JSR (A,X)
+            case 0xFD: { ushort b = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8)); ushort f = (ushort)(b + X); byte v = bus.Read(GetAddress(DBR, f)); int c = P.HasFlag(StatusFlags.Carry) ? 1 : 0; int d = A - v - (1 - c); P = (d >= 0) ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry); P = (((A ^ d) & (~v ^ d) & 0x80) != 0) ? (P | StatusFlags.Overflow) : (P & ~StatusFlags.Overflow); A = (byte)d; SetZeroAndNegativeFlags(A); break; } // SBC A,X
+            case 0xFF: { ushort l = bus.Read(GetAddress(PBR, PC++)); ushort h = bus.Read(GetAddress(PBR, PC++)); byte b = bus.Read(GetAddress(PBR, PC++)); uint ba = (uint)((b << 16) | (h << 8) | l); uint f = ba + X; byte v = bus.Read(f); int c = P.HasFlag(StatusFlags.Carry) ? 1 : 0; int d = A - v - (1 - c); P = (d >= 0) ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry); P = (((A ^ d) & (~v ^ d) & 0x80) != 0) ? (P | StatusFlags.Overflow) : (P & ~StatusFlags.Overflow); A = (byte)d; SetZeroAndNegativeFlags(A); break; } // SBC AL,X
+            case 0x06: // ASL Direct Page
+                {
+                    byte dpOffset = bus.Read(GetAddress(PBR, PC++));
+                    ushort address = (ushort)((DP + dpOffset) & 0xFFFF);
 
-            // El case 0x00 (BRK) ya no detiene un bucle, sino que podría ser usado
-            // para detener el emulador si quisiéramos. Por ahora, no hace nada.
-            case 0x00:
-                break;
-            case 0xA9: // LDA Inmediato
-                A = bus.Read(PC++);
-                SetZeroAndNegativeFlags(A);
-                break;
-            case 0xAD: // LDA Absoluto
-                {
-                    ushort address = (ushort)(bus.Read(PC++) | (bus.Read(PC++) << 8));
-                    A = bus.Read(address);
-                    SetZeroAndNegativeFlags(A);
-                    break;
-                }
-            case 0xA2: // LDX Inmediato
-                X = bus.Read(PC++);
-                SetZeroAndNegativeFlags(X);
-                break;
+                    byte value = bus.Read(GetAddress(DBR, address));
+                    P = (value & 0x80) != 0 ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry);
+                    value <<= 1;
+                    bus.Write(GetAddress(DBR, address), value);
 
-            // --- INSTRUCCIONES DE ALMACENAMIENTO (STORE) ---
-            case 0x8D: // STA Absoluto
-                {
-                    ushort address = (ushort)(bus.Read(PC++) | (bus.Read(PC++) << 8));
-                    bus.Write(address, A);
-                    break;
-                }
-            case 0x85: // STA Página Cero
-                {
-                    byte zeroPageAddress = bus.Read(PC++);
-                    bus.Write(zeroPageAddress, A);
-                    break;
-                }
-
-            // --- INSTRUCCIONES ARITMÉTICAS ---
-            case 0x7D: // ADC Absoluto,X
-                {
-                    ushort baseAddress = (ushort)(bus.Read(PC++) | (bus.Read(PC++) << 8));
-                    ushort finalAddress = (ushort)(baseAddress + X);
-                    byte value = bus.Read(finalAddress);
-
-                    int carry = P.HasFlag(StatusFlags.Carry) ? 1 : 0;
-                    int sum = A + value + carry;
-                    P = (sum > 255) ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry);
-                    P = (((A ^ sum) & (value ^ sum) & 0x80) != 0) ? (P | StatusFlags.Overflow) : (P & ~StatusFlags.Overflow);
-                    A = (byte)sum;
-                    SetZeroAndNegativeFlags(A);
-                    break;
-                }
-            case 0x65: // ADC Página Cero
-                {
-                    byte zeroPageAddress = bus.Read(PC++);
-                    byte value = bus.Read(zeroPageAddress);
-
-                    int carry = P.HasFlag(StatusFlags.Carry) ? 1 : 0;
-                    int sum = A + value + carry;
-                    P = (sum > 255) ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry);
-                    P = (((A ^ sum) & (value ^ sum) & 0x80) != 0) ? (P | StatusFlags.Overflow) : (P & ~StatusFlags.Overflow);
-                    A = (byte)sum;
-                    SetZeroAndNegativeFlags(A);
-                    break;
-                }
-
-            // --- INCREMENTOS Y COMPARACIONES ---
-            case 0xE8: // INX
-                X++;
-                SetZeroAndNegativeFlags(X);
-                break;
-            case 0xE0: // CPX Inmediato
-                {
-                    byte value = bus.Read(PC++);
-                    byte result = (byte)(X - value);
-                    SetZeroAndNegativeFlags(result);
-                    P = (X >= value) ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry);
-                    break;
-                }
-
-            // --- SALTOS Y BIFURCACIONES ---
-            case 0x4C: // JMP Absoluto
-                PC = (ushort)(bus.Read(PC) | (bus.Read((ushort)(PC + 1)) << 8));
-                break;
-            case 0xD0: // BNE Relativo
-                {
-                    sbyte offset = (sbyte)bus.Read(PC++);
-                    if (!P.HasFlag(StatusFlags.Zero))
-                    {
-                        PC = (ushort)(PC + offset);
-                    }
-                    break;
-                }
-            case 0xE6: // INC Zero Page
-                {
-                    byte address = bus.Read(PC++);
-                    byte value = bus.Read(address);
-                    value++;
-                    bus.Write(address, value);
                     SetZeroAndNegativeFlags(value);
                     break;
                 }
-            case 0x40: // RTI - Return from Interrupt
-                       // Hacemos lo opuesto a la interrupción: sacamos el estado de la pila.
-                P = (StatusFlags)Pop();
-                byte lo = Pop();
-                byte hi = Pop();
-                PC = (ushort)(lo | (hi << 8));
-                Console.WriteLine($"↪️ [CPU] Regresando de la interrupción a ${PC:X4}");
-                break;
-            case 0x48: // PHA - Push Accumulator
-                Push(A);
-                break;
-
-            case 0x68: // PLA - Pull Accumulator
-                A = Pop();
-                SetZeroAndNegativeFlags(A);
-                break;
-            // --- INSTRUCCIONES DE SUBRUTINA ---
-
-            case 0x20: // JSR - Jump to Subroutine
+            case 0x5B: // TCD - Transfer C to DP
                 {
-                    // Leemos la dirección de la subrutina
-                    ushort subAddr = (ushort)(bus.Read(PC++) | (bus.Read(PC++) << 8));
-
-                    // Guardamos la dirección de retorno (la instrucción actual - 1) en la pila
-                    ushort returnAddr = (ushort)(PC - 1);
-                    Push((byte)(returnAddr >> 8));   // Byte alto primero
-                    Push((byte)(returnAddr & 0xFF)); // Byte bajo después
-
-                    // Saltamos a la subrutina
-                    PC = subAddr;
+                    DP = C;
+                    SetZeroAndNegativeFlags16(DP);
                     break;
                 }
-
-            case 0x60: // RTS - Return from Subroutine
+            case 0x66: // ROR Direct Page
                 {
-                    // Sacamos la dirección de retorno de la pila
-                    byte low = Pop();
-                    byte high = Pop();
-                    ushort returnAddr = (ushort)(low | (high << 8));
+                    byte dpOffset = bus.Read(GetAddress(PBR, PC++));
+                    ushort address = (ushort)((DP + dpOffset) & 0xFFFF);
 
-                    // Apuntamos el PC a la siguiente instrucción después de la llamada original
-                    PC = (ushort)(returnAddr + 1);
-                    break;
-                }
-            case 0x66: // ROR Zero Page
-                {
-                    byte address = bus.Read(PC++);
-                    byte value = bus.Read(address);
+                    byte value = bus.Read(GetAddress(DBR, address));
                     bool oldCarry = P.HasFlag(StatusFlags.Carry);
 
-                    // El nuevo Carry será el bit 0 del valor original
-                    if ((value & 1) == 1)
-                    {
-                        P |= StatusFlags.Carry;
-                    }
-                    else
-                    {
-                        P &= ~StatusFlags.Carry;
-                    }
+                    P = (value & 1) == 1 ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry);
 
-                    // Rotar el valor hacia la derecha
                     value >>= 1;
-
-                    // Si el Carry antiguo era 1, establecer el bit 7 del nuevo valor
                     if (oldCarry)
                     {
                         value |= 0x80;
                     }
 
-                    bus.Write(address, value);
+                    bus.Write(GetAddress(DBR, address), value);
                     SetZeroAndNegativeFlags(value);
                     break;
                 }
-            case 0x58: // CLI - Clear Interrupt Disable
-                // // Borramos el flag de "InterruptDisable" usando una operación AND
-                // // con el complemento de bits del flag.
-                P &= ~StatusFlags.InterruptDisable;
-                break;
-            case 0x4B: // PHK - Push Program Bank Register
-                Push(PBR);
-                break;
-            case 0xE4: // CPX Zero Page
+                case 0xBC: // LDY Absolute,X
                 {
-                    // Leer la dirección de 8-bit de la página cero.
-                    byte address = bus.Read(PC++);
-                    // Obtener el valor desde esa dirección en RAM.
-                    byte value = bus.Read(address);
-                    // Realizar la comparación (una resta interna).
-                    byte result = (byte)(X - value);
-
-                    // Actualizar los flags.
-                    SetZeroAndNegativeFlags(result);
-                    // El flag de Carry se activa si X >= valor.
-                    P = (X >= value) ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry);
-                    break;
-                }
-            case 0x9C: // STZ Absolute
-                {
-                    // Leer la dirección de 16-bit.
-                    ushort address = (ushort)(bus.Read(PC++) | (bus.Read(PC++) << 8));
-                    // Escribir un cero en esa dirección.
-                    bus.Write(address, 0);
-                    break;
-                }
-            case 0xF1: // ADC (Direct Page,X) Indirect
-                {
-                    // Calcular la dirección indirecta en la página directa
-                    byte dpOffset = bus.Read(PC++);
-                    ushort indirectAddr = (ushort)((DP + dpOffset + X) & 0xFFFF);
-
-                    // Leer la dirección final de 16-bit desde la dirección indirecta
-                    ushort finalAddr = (ushort)(bus.Read(indirectAddr) | (bus.Read((ushort)(indirectAddr + 1)) << 8));
-
-                    // Obtener el valor desde la dirección final
-                    byte value = bus.Read(finalAddr);
-
-                    // Realizar la suma (misma lógica que los otros ADC)
-                    int carry = P.HasFlag(StatusFlags.Carry) ? 1 : 0;
-                    int sum = A + value + carry;
-
-                    P = (sum > 255) ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry);
-                    P = (((A ^ sum) & (value ^ sum) & 0x80) != 0) ? (P | StatusFlags.Overflow) : (P & ~StatusFlags.Overflow);
-
-                    A = (byte)sum;
-                    SetZeroAndNegativeFlags(A);
-                    break;
-                }
-            case 0x70: // BVS - Branch on Overflow Set
-                {
-                    // Leer el desplazamiento relativo de 8-bit.
-                    sbyte offset = (sbyte)bus.Read(PC++);
-
-                    // Si el flag de Overflow (V) está activado, se toma el salto.
-                    if (P.HasFlag(StatusFlags.Overflow))
-                    {
-                        PC = (ushort)(PC + offset);
-                    }
-                    break;
-                }
-            case 0x0D: // ORA Absolute
-                {
-                    // Leer la dirección de 16-bit.
-                    ushort address = (ushort)(bus.Read(PC++) | (bus.Read(PC++) << 8));
-                    byte value = bus.Read(address);
-
-                    // Realizar la operación OR y guardar en el Acumulador.
-                    A |= value;
-
-                    // Actualizar los flags.
-                    SetZeroAndNegativeFlags(A);
-                    break;
-                }
-            case 0xFC: // JSR (Absolute,X) Indirect
-                {
-                    // Leer la dirección base de 16-bit.
-                    ushort baseAddr = (ushort)(bus.Read(PC++) | (bus.Read(PC++) << 8));
-                    // Sumarle el registro X para encontrar la dirección del puntero.
-                    ushort indirectAddr = (ushort)(baseAddr + X);
-
-                    // Leer la dirección final del puntero.
-                    ushort finalAddr = (ushort)(bus.Read(indirectAddr) | (bus.Read((ushort)(indirectAddr + 1)) << 8));
-
-                    // Guardar la dirección de retorno en la pila.
-                    ushort returnAddr = (ushort)(PC - 1);
-                    Push((byte)(returnAddr >> 8));
-                    Push((byte)(returnAddr & 0xFF));
-
-                    // Saltar a la subrutina.
-                    PC = finalAddr;
-                    break;
-                }
-            case 0xEA: // NOP - No Operation
-                // // No hace nada, solo gasta ciclos.
-                break;
-            case 0xA7: // LDA (Direct Page) Indirect Long
-                {
-                    // Calcular la dirección indirecta en la página directa.
-                    byte dpOffset = bus.Read(PC++);
-                    ushort indirectAddr = (ushort)((DP + dpOffset) & 0xFFFF);
-
-                    // Leer la dirección larga de 24-bit desde la dirección indirecta.
-                    ushort addrLo = bus.Read(indirectAddr);
-                    ushort addrHi = bus.Read((ushort)(indirectAddr + 1));
-                    ushort addrBank = bus.Read((ushort)(indirectAddr + 2));
-
-                    uint finalAddress = (uint)((addrBank << 16) | (addrHi << 8) | addrLo);
-
-                    // NOTA: Nuestro Bus aún no maneja direcciones de 24-bit.
-                    // Como simplificación temporal, ignoraremos el banco y solo usaremos
-                    // los 16-bit inferiores para que el emulador pueda continuar.
-                    A = bus.Read((ushort)finalAddress);
-                    SetZeroAndNegativeFlags(A);
-                    break;
-                }
-            case 0xDC: // JMP (Absolute) Indirect Long
-                {
-                    // Leer la dirección indirecta de 16-bit.
-                    ushort indirectAddr = (ushort)(bus.Read(PC++) | (bus.Read(PC++) << 8));
-
-                    // Leer la dirección final de 24-bit desde la ubicación indirecta.
-                    ushort finalAddrLo = bus.Read(indirectAddr);
-                    ushort finalAddrHi = bus.Read((ushort)(indirectAddr + 1));
-                    byte finalAddrBank = bus.Read((ushort)(indirectAddr + 2));
-
-                    // Actualizar el PC y el PBR para realizar el salto largo.
-                    PC = (ushort)(finalAddrLo | (finalAddrHi << 8));
-                    PBR = finalAddrBank;
-                    break;
-                }
-                case 0x3B: // TSC - Transfer Stack to C
-                C = SP; // Transferencia directa de 16-bit
-                SetZeroAndNegativeFlags16(C); // Actualizar flags con el valor de 16-bit
-                break;
-                case 0xE1: // SBC (Direct Page,X) Indirect
-                {
-                    // Calcular la dirección del puntero
-                    byte dpOffset = bus.Read(PC++);
-                    ushort indirectAddr = (ushort)((DP + dpOffset + X) & 0xFFFF);
-
-                    // Leer la dirección final de 16-bit
-                    ushort finalAddr = (ushort)(bus.Read(indirectAddr) | (bus.Read((ushort)(indirectAddr + 1)) << 8));
-
-                    // Obtener el valor desde la dirección final
-                    byte value = bus.Read(finalAddr);
-
-                    // Realizar la resta (A - valor - !Carry)
-                    int carry = P.HasFlag(StatusFlags.Carry) ? 1 : 0;
-                    int diff = A - value - (1 - carry);
-
-                    // Actualizar los flags
-                    // Carry se activa si no hubo préstamo (resultado >= 0)
-                    P = (diff >= 0) ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry);
-                    // Overflow se activa si el signo del resultado es incorrecto
-                    P = (((A ^ diff) & (~value ^ diff) & 0x80) != 0) ? (P | StatusFlags.Overflow) : (P & ~StatusFlags.Overflow);
-
-                    A = (byte)diff;
-                    SetZeroAndNegativeFlags(A);
-                    break;
-                }
-                case 0xDE: // DEC Absolute,X
-                {
-                    // Leer la dirección base de 16-bit.
-                    ushort baseAddr = (ushort)(bus.Read(PC++) | (bus.Read(PC++) << 8));
-                    // Sumarle el registro X para obtener la dirección final.
-                    ushort finalAddr = (ushort)(baseAddr + X);
-
-                    // Leer el valor, restarle uno y escribirlo de vuelta.
-                    byte value = bus.Read(finalAddr);
-                    value--;
-                    bus.Write(finalAddr, value);
-
-                    // Actualizar los flags.
-                    SetZeroAndNegativeFlags(value);
-                    break;
-                }
-                case 0xAE: // LDX Absolute
-                {
-                    // Leer la dirección de 16-bit.
-                    ushort address = (ushort)(bus.Read(PC++) | (bus.Read(PC++) << 8));
-                    // Cargar el valor desde esa dirección en el registro X.
-                    X = bus.Read(address);
-
-                    // Actualizar los flags.
-                    SetZeroAndNegativeFlags(X);
-                    break;
-                }
-                case 0xD4: // PEI - (Direct Page) Indirect
-                {
-                    // Leer el offset de la página directa.
-                    byte dpOffset = bus.Read(PC++);
-                    ushort indirectAddr = (ushort)((DP + dpOffset) & 0xFFFF);
-
-                    // Leer la dirección efectiva de 16-bit desde la ubicación indirecta.
-                    ushort effectiveAddr = (ushort)(bus.Read(indirectAddr) | (bus.Read((ushort)(indirectAddr + 1)) << 8));
-
-                    // Guardar la dirección en la pila (stack).
-                    Push((byte)(effectiveAddr >> 8));   // Byte alto
-                    Push((byte)(effectiveAddr & 0xFF)); // Byte bajo
-                    break;
-                }
-                case 0xFD: // SBC Absolute,X
-                {
-                    // Leer la dirección base de 16-bit.
-                    ushort baseAddr = (ushort)(bus.Read(PC++) | (bus.Read(PC++) << 8));
-                    // Sumarle el registro X para obtener la dirección final.
-                    ushort finalAddr = (ushort)(baseAddr + X);
-
-                    byte value = bus.Read(finalAddr);
-
-                    // Realizar la resta (A - valor - !Carry).
-                    int carry = P.HasFlag(StatusFlags.Carry) ? 1 : 0;
-                    int diff = A - value - (1 - carry);
-
-                    // Actualizar los flags.
-                    P = (diff >= 0) ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry);
-                    P = (((A ^ diff) & (~value ^ diff) & 0x80) != 0) ? (P | StatusFlags.Overflow) : (P & ~StatusFlags.Overflow);
-
-                    A = (byte)diff;
-                    SetZeroAndNegativeFlags(A);
-                    break;
-                }
-                case 0xFF: // SBC Absolute Long,X
-                {
-                    // Leer la dirección base larga de 24-bit.
-                    ushort addrLo = bus.Read(PC++);
-                    ushort addrHi = bus.Read(PC++);
-                    ushort addrBank = bus.Read(PC++);
-                    uint baseAddr = (uint)((addrBank << 16) | (addrHi << 8) | addrLo);
-
-                    // Sumarle el registro X para obtener la dirección final.
-                    uint finalAddress = baseAddr + X;
-
-                    // NOTA: Aún usamos nuestro Bus de 16-bit. Ignoramos el banco por ahora.
-                    byte value = bus.Read((ushort)finalAddress);
-
-                    // Realizar la resta (A - valor - !Carry).
-                    int carry = P.HasFlag(StatusFlags.Carry) ? 1 : 0;
-                    int diff = A - value - (1 - carry);
-
-                    // Actualizar los flags.
-                    P = (diff >= 0) ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry);
-                    P = (((A ^ diff) & (~value ^ diff) & 0x80) != 0) ? (P | StatusFlags.Overflow) : (P & ~StatusFlags.Overflow);
-
-                    A = (byte)diff;
-                    SetZeroAndNegativeFlags(A);
-                    break;
-                }
-                case 0x69: // ADC Immediate
-                {
-                    // Leer el valor inmediato que sigue a la instrucción.
-                    byte value = bus.Read(PC++);
-
-                    // Realizar la suma (A + valor + Carry).
-                    int carry = P.HasFlag(StatusFlags.Carry) ? 1 : 0;
-                    int sum = A + value + carry;
-
-                    // Actualizar los flags.
-                    P = (sum > 255) ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry);
-                    P = (((A ^ sum) & (value ^ sum) & 0x80) != 0) ? (P | StatusFlags.Overflow) : (P & ~StatusFlags.Overflow);
-
-                    // Guardar el resultado en el Acumulador.
-                    A = (byte)sum;
-                    SetZeroAndNegativeFlags(A);
-                    break;
-                }
-                case 0xCE: // DEC Absolute
-                {
-                    // Leer la dirección de 16-bit.
-                    ushort address = (ushort)(bus.Read(PC++) | (bus.Read(PC++) << 8));
-
-                    // Leer el valor, restarle uno y escribirlo de vuelta.
-                    byte value = bus.Read(address);
-                    value--;
-                    bus.Write(address, value);
-
-                    // Actualizar los flags.
-                    SetZeroAndNegativeFlags(value);
-                    break;
-                }
-                case 0x9E: // STZ Absolute,X
-                {
-                    // Leer la dirección base de 16-bit.
-                    ushort baseAddr = (ushort)(bus.Read(PC++) | (bus.Read(PC++) << 8));
-                    // Sumarle el registro X para obtener la dirección final.
-                    ushort finalAddr = (ushort)(baseAddr + X);
-
-                    // Escribir un cero en esa dirección.
-                    bus.Write(finalAddr, 0);
-                    break;
-                }
-                case 0x01: // ORA (Direct Page,X) Indirect
-                {
-                    // Calcular la dirección indirecta en la página directa
-                    byte dpOffset = bus.Read(PC++);
-                    ushort indirectAddr = (ushort)((DP + dpOffset + X) & 0xFFFF);
-
-                    // Leer la dirección final de 16-bit desde la dirección indirecta
-                    ushort finalAddr = (ushort)(bus.Read(indirectAddr) | (bus.Read((ushort)(indirectAddr + 1)) << 8));
-
-                    // Obtener el valor y realizar la operación OR
-                    byte value = bus.Read(finalAddr);
-                    A |= value;
-
-                    // Actualizar los flags
-                    SetZeroAndNegativeFlags(A);
-                    break;
-                }
-                case 0x9B: // TXY - Transfer X to Y
-                {
-                    Y = X;
+                    ushort baseAddr = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8));
+                    ushort finalOffset = (ushort)(baseAddr + X);
+                    Y = bus.Read(GetAddress(DBR, finalOffset));
                     SetZeroAndNegativeFlags(Y);
                     break;
                 }
-                case 0x5E: // LSR Absolute,X
+                case 0x36: // ROL Direct Page,X
                 {
-                    // Calcular la dirección final.
-                    ushort baseAddr = (ushort)(bus.Read(PC++) | (bus.Read(PC++) << 8));
-                    ushort finalAddr = (ushort)(baseAddr + X);
+                    byte dpOffset = bus.Read(GetAddress(PBR, PC++));
+                    ushort address = (ushort)((DP + dpOffset + X) & 0xFFFF);
 
-                    byte value = bus.Read(finalAddr);
+                    byte value = bus.Read(GetAddress(DBR, address));
+                    bool oldCarry = P.HasFlag(StatusFlags.Carry);
 
-                    // El bit 0 original se convierte en el nuevo Carry.
+                    P = (value & 0x80) != 0 ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry);
+
+                    value <<= 1;
+                    if (oldCarry) value |= 1;
+
+                    bus.Write(GetAddress(DBR, address), value);
+                    SetZeroAndNegativeFlags(value);
+                    break;
+                }
+                case 0x46: // LSR Direct Page
+                {
+                    byte dpOffset = bus.Read(GetAddress(PBR, PC++));
+                    ushort address = (ushort)((DP + dpOffset) & 0xFFFF);
+
+                    byte value = bus.Read(GetAddress(DBR, address));
+
                     P = (value & 1) == 1 ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry);
 
-                    // Desplazar el valor a la derecha.
                     value >>= 1;
 
-                    bus.Write(finalAddr, value);
+                    bus.Write(GetAddress(DBR, address), value);
 
-                    // Actualizar flags Z y N. El flag N siempre será 0.
                     P = value == 0 ? (P | StatusFlags.Zero) : (P & ~StatusFlags.Zero);
                     P &= ~StatusFlags.Negative; // El bit 7 siempre es 0, así que N siempre es 0.
                     break;
                 }
-                case 0x04: // TSB Direct Page
+                case 0x0C: // TSB Absolute
                 {
-                    // Calcular la dirección en la página directa.
-                    byte dpOffset = bus.Read(PC++);
-                    ushort address = (ushort)((DP + dpOffset) & 0xFFFF);
+                    ushort address = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8));
 
-                    byte value = bus.Read(address);
+                    byte value = bus.Read(GetAddress(DBR, address));
 
-                    // 1. "Test": Realizar un AND para actualizar el flag Zero.
+                    // "Test": Actualiza el flag Zero basado en A & valor.
                     P = (A & value) == 0 ? (P | StatusFlags.Zero) : (P & ~StatusFlags.Zero);
 
-                    // 2. "Set": Realizar un OR y escribir el resultado en memoria.
+                    // "Set": Realiza un OR y escribe el resultado en memoria.
                     value |= A;
-                    bus.Write(address, value);
+                    bus.Write(GetAddress(DBR, address), value);
                     break;
                 }
-                case 0x02: // COP - Co-processor Interrupt
+                case 0x1D: // ORA Absolute,X
                 {
-                    // La instrucción COP tiene un operando de 1 byte que se ignora al ejecutar,
-                    // pero se guarda en la pila la dirección del siguiente byte.
-                    ushort returnAddr = (ushort)(PC + 1);
-                    Push((byte)(returnAddr >> 8));
-                    Push((byte)(returnAddr & 0xFF));
-                    Push((byte)P);
+                    ushort baseAddr = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8));
+                    ushort finalOffset = (ushort)(baseAddr + X);
 
-                    // Saltar a la dirección del vector de interrupción COP.
-                    ushort lowByte = bus.Read(0xFFF4);
-                    ushort highByte = bus.Read(0xFFF5);
-                    PC = (ushort)(lowByte | (highByte << 8));
-                    break;
-                }
-                case 0x03: // ORA Stack Relative
-                {
-                    // Leer el offset de 8-bit desde la instrucción.
-                    byte offset = bus.Read(PC++);
-                    // Calcular la dirección final sumando el offset al Stack Pointer.
-                    ushort finalAddr = (ushort)(SP + offset);
-
-                    // Obtener el valor y realizar la operación OR.
-                    byte value = bus.Read(finalAddr);
+                    byte value = bus.Read(GetAddress(DBR, finalOffset));
                     A |= value;
 
-                    // Actualizar los flags.
                     SetZeroAndNegativeFlags(A);
                     break;
                 }
-                case 0x8F: // STA Absolute Long
+                case 0x78: // SEI - Set Interrupt Disable
                 {
-                    // Leer la dirección larga de 24-bit.
-                    ushort addrLo = bus.Read(PC++);
-                    ushort addrHi = bus.Read(PC++);
-                    ushort addrBank = bus.Read(PC++);
-                    uint finalAddress = (uint)((addrBank << 16) | (addrHi << 8) | addrLo);
-
-                    // NOTA: Aún usamos nuestro Bus de 16-bit. Ignoramos el banco por ahora.
-                    bus.Write((ushort)finalAddress, A);
+                    P |= StatusFlags.InterruptDisable;
                     break;
                 }
-                case 0x80: // BRA - Branch Always
+                case 0xA9: // LDA Immediate
                 {
-                    // Leer el desplazamiento relativo de 8-bit.
-                    sbyte offset = (sbyte)bus.Read(PC++);
-                    // Sumar el offset al PC para realizar el salto.
-                    PC = (ushort)(PC + offset);
-                    break;
-                }
-                case 0x8E: // STX Absolute
-                {
-                    // Leer la dirección de 16-bit.
-                    ushort address = (ushort)(bus.Read(PC++) | (bus.Read(PC++) << 8));
-                    // Escribir el valor del registro X en esa dirección.
-                    bus.Write(address, X);
-                    break;
-                }
-                case 0x81: // STA (Direct Page,X) Indirect
-                {
-                    // Calcular la dirección indirecta en la página directa.
-                    byte dpOffset = bus.Read(PC++);
-                    ushort indirectAddr = (ushort)((DP + dpOffset + X) & 0xFFFF);
-
-                    // Leer la dirección final de 16-bit desde la dirección indirecta.
-                    ushort finalAddr = (ushort)(bus.Read(indirectAddr) | (bus.Read((ushort)(indirectAddr + 1)) << 8));
-
-                    // Escribir el valor del acumulador en la dirección final.
-                    bus.Write(finalAddr, A);
-                    break;
-                }
-                case 0x57: // EOR (Direct Page) Indirect Long
-                {
-                    // Calcular la dirección indirecta en la página directa.
-                    byte dpOffset = bus.Read(PC++);
-                    ushort indirectAddr = (ushort)((DP + dpOffset) & 0xFFFF);
-
-                    // Leer la dirección larga de 24-bit desde la dirección indirecta.
-                    ushort addrLo = bus.Read(indirectAddr);
-                    ushort addrHi = bus.Read((ushort)(indirectAddr + 1));
-                    ushort addrBank = bus.Read((ushort)(indirectAddr + 2));
-                    uint finalAddress = (uint)((addrBank << 16) | (addrHi << 8) | addrLo);
-
-                    // NOTA: Aún usamos nuestro Bus de 16-bit. Ignoramos el banco por ahora.
-                    byte value = bus.Read((ushort)finalAddress);
-
-                    // Realizar la operación XOR.
-                    A ^= value;
-
-                    // Actualizar los flags.
+                    A = bus.Read(GetAddress(PBR, PC++));
                     SetZeroAndNegativeFlags(A);
                     break;
                 }
-                
+                case 0x2B: // PLA - Pull Accumulator
+                {
+                    A = Pop();
+                    SetZeroAndNegativeFlags(A);
+                    break;
+                }
+                case 0x3C: // TRB Absolute
+                {
+                    ushort address = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8));
+                    byte value = bus.Read(GetAddress(DBR, address));
 
+                    P = (A & value) == 0 ? (P | StatusFlags.Zero) : (P & ~StatusFlags.Zero);
+
+                    value &= (byte)~A;
+                    bus.Write(GetAddress(DBR, address), value);
+                    break;
+                }
+                case 0xC6: // DEC Direct Page
+                {
+                    byte dpOffset = bus.Read(GetAddress(PBR, PC++));
+                    ushort address = (ushort)((DP + dpOffset) & 0xFFFF);
+
+                    byte value = bus.Read(GetAddress(DBR, address));
+                    value--;
+                    bus.Write(GetAddress(DBR, address), value);
+
+                    SetZeroAndNegativeFlags(value);
+                    break;
+                }
+                case 0xCC: // CPY Absolute
+                {
+                    ushort address = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8));
+                    byte value = bus.Read(GetAddress(DBR, address));
+                    byte result = (byte)(Y - value);
+
+                    SetZeroAndNegativeFlags(result);
+                    P = (Y >= value) ? (P | StatusFlags.Carry) : (P & ~StatusFlags.Carry);
+                    break;
+                }
+                case 0xFE: // INC Absolute,X
+                {
+                    ushort baseAddr = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8));
+                    ushort finalAddr = (ushort)(baseAddr + X);
+
+                    byte value = bus.Read(GetAddress(DBR, finalAddr));
+                    value++;
+                    bus.Write(GetAddress(DBR, finalAddr), value);
+
+                    SetZeroAndNegativeFlags(value);
+                    break;
+                }
+                case 0x7C: // JMP (Absolute,X) Indirect
+                {
+                    ushort baseAddr = (ushort)(bus.Read(GetAddress(PBR, PC++)) | (bus.Read(GetAddress(PBR, PC++)) << 8));
+                    ushort indirectAddr = (ushort)(baseAddr + X);
+
+                    // Lee la dirección final de 16-bit
+                    PC = (ushort)(bus.Read(GetAddress(PBR, indirectAddr)) | (bus.Read(GetAddress(PBR, (ushort)(indirectAddr + 1))) << 8));
+                    break;
+                }
+                case 0x72: { byte o=bus.Read(GetAddress(PBR,PC++)); ushort i=(ushort)((DP+o)&0xFFFF); ushort f=(ushort)(bus.Read(GetAddress(DBR,i))|(bus.Read(GetAddress(DBR,(ushort)(i+1)))<<8)); byte v=bus.Read(GetAddress(DBR,f)); int c=P.HasFlag(StatusFlags.Carry)?1:0; int s=A+v+c; P=(s>255)?(P|StatusFlags.Carry):(P&~StatusFlags.Carry); P=(((A^s)&(v^s)&0x80)!=0)?(P|StatusFlags.Overflow):(P&~StatusFlags.Overflow); A=(byte)s; SetZeroAndNegativeFlags(A); break; } // ADC (DP),I
+                case 0x24: { byte o=bus.Read(GetAddress(PBR,PC++)); ushort a=(ushort)((DP+o)&0xFFFF); byte v=bus.Read(GetAddress(DBR,a)); P=(A&v)==0?(P|StatusFlags.Zero):(P&~StatusFlags.Zero); P=(v&0x80)!=0?(P|StatusFlags.Negative):(P&~StatusFlags.Negative); P=(v&0x40)!=0?(P|StatusFlags.Overflow):(P&~StatusFlags.Overflow); break; } // BIT DP
+                case 0x25: { byte o=bus.Read(GetAddress(PBR,PC++)); ushort a=(ushort)((DP+o)&0xFFFF); byte v=bus.Read(GetAddress(DBR,a)); A&=v; SetZeroAndNegativeFlags(A); break; } // AND DP
+                case 0x26: { byte o=bus.Read(GetAddress(PBR,PC++)); ushort a=(ushort)((DP+o)&0xFFFF); byte v=bus.Read(GetAddress(DBR,a)); bool oc=P.HasFlag(StatusFlags.Carry); P=(v&0x80)!=0?(P|StatusFlags.Carry):(P&~StatusFlags.Carry); v<<=1; if(oc)v|=1; bus.Write(GetAddress(DBR,a),v); SetZeroAndNegativeFlags(v); break; } // ROL DP
+                case 0x87: { byte o=bus.Read(GetAddress(PBR,PC++)); ushort i=(ushort)((DP+o)&0xFFFF); ushort l=bus.Read(GetAddress(DBR,i)); ushort h=bus.Read(GetAddress(DBR,(ushort)(i+1))); byte b=bus.Read(GetAddress(DBR,(ushort)(i+2))); uint f=(uint)((b<<16)|(h<<8)|l); bus.Write(f,A); break; } // STA [DP]
+                case 0xA2: { X=bus.Read(GetAddress(PBR,PC++)); SetZeroAndNegativeFlags(X); break; } // LDX #
+            #endregion
             default:
-                // Detenemos la ejecución si no conocemos el opcode.
-                Console.WriteLine($"❌ Opcode Desconocido: ${opcode:X2} en la dirección ${PC - 1:X4}");
-                // Para detener todo el emulador, podríamos cerrar la ventana.
-                // window.Close(); // (Esta línea la pondríamos en Program.cs)
+                Console.WriteLine($"❌ Opcode Desconocido: ${opcode:X2} en la dirección ${GetAddress(PBR, (ushort)(PC - 1)):X6}");
+                // Para detener el bucle, podríamos necesitar un mecanismo para cerrar la ventana
                 break;
         }
     }

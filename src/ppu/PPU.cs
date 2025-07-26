@@ -1,6 +1,7 @@
 // PPU.cs
 public class PPU
 {
+    private bool isScreenEnabled = false;
     private readonly Bus bus;
 
     // Memorias internas
@@ -17,6 +18,7 @@ public class PPU
     private byte cgramAddress = 0;
     private ushort _horizontalScroll = 0;
     private ushort _verticalScroll = 0;
+
 
     public PPU(Bus bus)
     {
@@ -48,9 +50,39 @@ public class PPU
     {
         switch (address)
         {
-            case 0x2100: // Brillo
+            // --- Registro de Control de Pantalla ---
+            case 0x2100:
+                isScreenEnabled = (data & 0x80) == 0;
                 this.screenBrightness = (byte)(data & 0x0F);
+                isScreenEnabled = (data & 0x80) == 0; // El bit 7 apaga la pantalla si es 1
+                Console.WriteLine($"[PPU] Escritura en $2100: Brillo={this.screenBrightness}, Pantalla Activada={isScreenEnabled}");
                 break;
+
+            // --- Registro de Modo de Gráficos ---
+            case 0x2105:
+                Console.WriteLine($"[PPU] Escritura en $2105 (Modo Gráfico): Se estableció el modo a {data & 0x07}");
+                break;
+
+            // --- VRAM ---
+            case 0x2116: vramAddress = (ushort)((vramAddress & 0xFF00) | data); break;
+            case 0x2117: vramAddress = (ushort)((vramAddress & 0x00FF) | (data << 8)); break;
+            case 0x2118:
+                // Evitamos llenar la consola con miles de escrituras a VRAM
+                // Console.WriteLine($"[PPU] Escribiendo {data:X2} en VRAM en la dirección ${vramAddress:X4}");
+                vram[vramAddress++] = data;
+                break;
+
+            // --- CGRAM ---
+            case 0x2121:
+                this.cgramAddress = data;
+                Console.WriteLine($"[PPU] Dirección de CGRAM establecida en: ${cgramAddress:X2}");
+                break;
+            case 0x2122:
+                // ... (lógica de escritura en CGRAM) ...
+                break;
+            // case 0x2100: // Brillo
+            //     this.screenBrightness = (byte)(data & 0x0F);
+            //     break;
 
             // Registros de Scroll (sin cambios)
             case 0x210D: _horizontalScroll = (ushort)((_horizontalScroll & 0xFF00) | data); break;
@@ -59,44 +91,48 @@ public class PPU
             case 0x2110: _verticalScroll = (ushort)((_verticalScroll & 0x00FF) | (data << 8)); break;
 
             // Registros de VRAM (sin cambios)
-            case 0x2116: vramAddress = (ushort)((vramAddress & 0xFF00) | data); break;
-            case 0x2117: vramAddress = (ushort)((vramAddress & 0x00FF) | (data << 8)); break;
-            case 0x2118: vram[vramAddress++] = data; break;
+            // case 0x2116: vramAddress = (ushort)((vramAddress & 0xFF00) | data); break;
+            // case 0x2117: vramAddress = (ushort)((vramAddress & 0x00FF) | (data << 8)); break;
+            // case 0x2118: vram[vramAddress++] = data; break;
 
             // Registros de OAM (sin cambios)
             case 0x2102: oamAddress = data; break;
             case 0x2103: break;
             case 0x2104: oam[oamAddress++] = data; break;
 
-            // --- LÓGICA DE CGRAM CORREGIDA ---
-            case 0x2121: // CGRAM Address
-                this.cgramAddress = data;
-                this.isSecondCgramWrite = false; // Cada vez que se establece una dirección, se reinicia el ciclo de escritura
-                break;
-            case 0x2122: // CGRAM Data Write
-                if (!isSecondCgramWrite)
-                {
-                    // Este es el primer byte (el bajo)
-                    cgramLowByte = data;
-                    isSecondCgramWrite = true;
-                }
-                else
-                {
-                    // Este es el segundo byte (el alto). Ahora podemos escribir el color completo.
-                    int byteAddress = cgramAddress * 2;
-                    cgram[byteAddress] = cgramLowByte;
-                    cgram[byteAddress + 1] = data; // 'data' es el byte alto
 
-                    cgramAddress++; // Incrementar la dirección para la siguiente escritura de color
-                    isSecondCgramWrite = false;
-                }
-                break;
+                // --- LÓGICA DE CGRAM CORREGIDA ---
+                // case 0x2121: // CGRAM Address
+                //     this.cgramAddress = data;
+                //     this.isSecondCgramWrite = false; // Cada vez que se establece una dirección, se reinicia el ciclo de escritura
+                //     break;
+                // case 0x2122: // CGRAM Data Write
+                //     if (!isSecondCgramWrite)
+                //     {
+                //         // Este es el primer byte (el bajo)
+                //         cgramLowByte = data;
+                //         isSecondCgramWrite = true;
+                //     }
+                //     else
+                //     {
+                //         // Este es el segundo byte (el alto). Ahora podemos escribir el color completo.
+                //         int byteAddress = cgramAddress * 2;
+                //         cgram[byteAddress] = cgramLowByte;
+                //         cgram[byteAddress + 1] = data; // 'data' es el byte alto
+
+                //         cgramAddress++; // Incrementar la dirección para la siguiente escritura de color
+                //         isSecondCgramWrite = false;
+                //     }
+                //     break;
         }
     }
-public void RenderFrame(byte[] pixelBuffer)
+    public void RenderFrame(byte[] pixelBuffer)
     {
-        // 1. Limpiar el buffer de la pantalla al inicio de cada fotograma
-        Array.Clear(pixelBuffer, 0, pixelBuffer.Length);
+       if (!isScreenEnabled)
+        {
+            Array.Clear(pixelBuffer, 0, pixelBuffer.Length);
+            return;
+        }
 
         // --- 2. DIBUJAR EL FONDO ---
         const int TILEMAP_BASE = 0x1000;

@@ -1,98 +1,84 @@
-// Bus.cs
 public class Bus
 {
-    // El Bus ahora "posee" los componentes principales
-    private readonly PPU _ppu;
-    private CPU cpu; // No es readonly para poder conectarlo después
+    private CPU cpu;
+    public readonly PPU ppu;
+    public readonly Controller controller1 = new Controller();
+    
     private readonly byte[] wram = new byte[128 * 1024];
-    private byte[] romData = new byte[65536];
-    public PPU Ppu => _ppu;
-    private readonly Controller controller1 = new Controller();
-    public Controller Controller1 => controller1;
+    private byte[] romData;
+    private int romHeaderSize = 0;
 
     public Bus()
     {
-        this._ppu = new PPU(this);
+        this.ppu = new PPU(this);
     }
+
     public void ConnectCPU(CPU cpu)
     {
         this.cpu = cpu;
     }
 
-    // El resto de los métodos de Bus...
     public void LoadRom(byte[] rom)
     {
-        Console.WriteLine($"Cargando ROM de {rom.Length} bytes.");
         this.romData = rom;
-        // Aquí leeríamos el header de la ROM para detectar si es LoROM, HiROM, etc.
-        // Por ahora, asumiremos que todas son LoROM.
+        if ((rom.Length % 1024) == 512)
+        {
+            this.romHeaderSize = 512;
+            Console.WriteLine("Encabezado de 512 bytes detectado y omitido.");
+        }
     }
+
     public void TriggerNMI()
     {
-        cpu.RequestNMI();
+        cpu?.RequestNMI();
     }
 
-    public byte Read(ushort address)
+    public byte Read(uint address)
     {
-        int bank = address >> 8; // Simplificado, el banco real es más complejo
+        byte bank = (byte)(address >> 16);
+        ushort offset = (ushort)(address & 0xFFFF);
 
-        // Mapeo de WRAM ($0000-$1FFF en los bancos $7E y $7F)
-        if (address >= 0x0000 && address <= 0x1FFF)
+        // Mapeo de WRAM y Registros
+        if ((bank >= 0x00 && bank <= 0x3F) || (bank >= 0x80 && bank <= 0xBF))
         {
-            return wram[address];
+            if (offset < 0x2000) return wram[offset];
+            if (offset >= 0x2100 && offset <= 0x21FF) return ppu.Read(offset);
+            if (offset == 0x4016) return controller1.Read();
         }
 
-        // Mapeo de Registros PPU ($2100-$21FF)
-        if (address >= 0x2100 && address <= 0x21FF)
+        // Mapeo de ROM (LoROM)
+        // La ROM se mapea en la mitad superior de los bancos ($8000-$FFFF)
+        if (offset >= 0x8000)
         {
-            return _ppu.Read(address);
-        }
-
-        // Mapeo de Controles ($4016)
-        if (address == 0x4016)
-        {
-            return controller1.Read();
-        }
-
-        // Mapeo de la ROM (LoROM)
-        // El contenido de la ROM se mapea en la mitad superior de los bancos ($8000-$FFFF)
-        if (address >= 0x8000)
-        {
-            // Calculamos el índice en el array de la ROM
-            // Esto es una simplificación, pero funciona para muchas ROMs LoROM.
-            int romAddress = (bank * 0x8000) + (address & 0x7FFF);
+            // Fórmula de mapeo LoROM que convierte una dirección de CPU a un índice de archivo
+            uint romAddress = (uint)(((bank & 0x7F) * 32768) + (offset - 0x8000)) + (uint)romHeaderSize;
             if (romAddress < romData.Length)
             {
                 return romData[romAddress];
             }
         }
+        if (offset == 0x4218) // JOY1L - Low byte del control 1
+        {
+            return (byte)(controller1.JoypadState & 0xFF);
+        }
+        if (offset == 0x4219) // JOY1H - High byte del control 1
+        {
+            return (byte)(controller1.JoypadState >> 8);
+        }
 
-        return 0; // Dirección no mapeada
+        return 0; // Bus abierto
     }
 
-    public void Write(ushort address, byte data)
+    public void Write(uint address, byte data)
     {
-        int bank = address >> 8;
-
-        // Mapeo de WRAM
-        if (address >= 0x0000 && address <= 0x1FFF)
+        byte bank = (byte)(address >> 16);
+        ushort offset = (ushort)(address & 0xFFFF);
+        
+        if ((bank >= 0x00 && bank <= 0x3F) || (bank >= 0x80 && bank <= 0xBF))
         {
-            wram[address] = data;
-            return;
-        }
-
-        // Mapeo de Registros PPU
-        if (address >= 0x2100 && address <= 0x21FF)
-        {
-            _ppu.Write(address, data);
-            return;
-        }
-
-        // Mapeo de Controles
-        if (address == 0x4016)
-        {
-            if ((data & 1) == 0) controller1.Strobe();
-            return;
+            if (offset < 0x2000) { wram[offset] = data; return; }
+            if (offset >= 0x2100 && offset <= 0x21FF) { ppu.Write(offset, data); return; }
+            if (offset == 0x4016) { if ((data & 1) == 0) controller1.Strobe(); return; }
         }
     }
 }
